@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import random
 import datetime
+from streamlit_autorefresh import st_autorefresh
 
 # --- App Configuration ---
 st.set_page_config(page_title="Badminton Scheduler", layout="wide")
@@ -9,38 +10,27 @@ st.set_page_config(page_title="Badminton Scheduler", layout="wide")
 # --- Constants ---
 MAX_COURTS = 4
 SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
-MIN_GAME_MINUTES = 3
-MAX_GAME_MINUTES = 10
-SESSION_DURATION_HOURS = 2
 
 # --- Helper Functions ---
 def initialize_state():
     """Initializes the session state variables if they don't exist."""
     if 'all_players' not in st.session_state:
-        st.session_state.all_players = [] # List of {'id': int, 'name': str, 'skill': int}
+        st.session_state.all_players = []
     if 'session_started' not in st.session_state:
         st.session_state.session_started = False
     if 'attendees' not in st.session_state:
-        st.session_state.attendees = {} # Dict of {player_id: player_data}
+        st.session_state.attendees = {}
     if 'waiting_players' not in st.session_state:
+        # Players available for the very next game
         st.session_state.waiting_players = []
+    if 'finished_players' not in st.session_state:
+        # Players who have finished a game and are waiting for the round to end
+        st.session_state.finished_players = []
     if 'active_games' not in st.session_state:
-        st.session_state.active_games = [] # List of game dicts
-    if 'is_auto_mode' not in st.session_state:
-        st.session_state.is_auto_mode = False
-    if 'session_end_time' not in st.session_state:
-        st.session_state.session_end_time = None
-
-def format_time_delta(delta):
-    """Formats a timedelta object into H:M:S or M:S string."""
-    total_seconds = int(delta.total_seconds())
-    if total_seconds < 0:
-        return "Finished!"
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours:02}:{minutes:02}:{seconds:02}"
-    return f"{minutes:02}:{seconds:02}"
+        st.session_state.active_games = []
+    if 'last_match_result' not in st.session_state:
+        # Tracks player's last result {'player_id': 'win'/'loss'}
+        st.session_state.last_match_result = {}
 
 # --- Main App Logic ---
 initialize_state()
@@ -70,9 +60,8 @@ with st.sidebar:
     if not st.session_state.all_players:
         st.info("No players added yet.")
     else:
-        # Sort players for consistent display
         sorted_players = sorted(st.session_state.all_players, key=lambda p: p['name'])
-        for i, player in enumerate(sorted_players):
+        for player in sorted_players:
             col1, col2, col3 = st.columns([3, 2, 1])
             with col1:
                 st.write(f"**{player['name']}**")
@@ -83,9 +72,8 @@ with st.sidebar:
                     st.session_state.all_players = [p for p in st.session_state.all_players if p['id'] != player['id']]
                     st.rerun()
 
-
 # --- Main Content Area ---
-st.title("🏸 Badminton Session Scheduler")
+st.title("🏸 Badminton Score & Scheduler")
 
 if not st.session_state.session_started:
     st.header("1. Mark Attendance")
@@ -103,113 +91,85 @@ if not st.session_state.session_started:
         num_attendees = sum(attendee_selections.values())
         st.info(f"**{num_attendees}** players selected.")
 
-        can_start = num_attendees >= 4
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Start Manual Session", disabled=not can_start, use_container_width=True):
-                st.session_state.attendees = {
-                    p['id']: p for p in st.session_state.all_players if attendee_selections.get(p['id'])
-                }
-                st.session_state.waiting_players = list(st.session_state.attendees.values())
-                st.session_state.session_started = True
-                st.session_state.is_auto_mode = False
-                st.rerun()
-        with col2:
-            if st.button(f"Start {SESSION_DURATION_HOURS}-Hour Auto-Session", disabled=not can_start, type="primary", use_container_width=True):
-                st.session_state.attendees = {
-                    p['id']: p for p in st.session_state.all_players if attendee_selections.get(p['id'])
-                }
-                st.session_state.waiting_players = list(st.session_state.attendees.values())
-                st.session_state.session_started = True
-                st.session_state.is_auto_mode = True
-                st.session_state.session_end_time = datetime.datetime.now() + datetime.timedelta(hours=SESSION_DURATION_HOURS)
-                st.rerun()
+        if st.button("Start Session", disabled=(num_attendees < 4), type="primary", use_container_width=True):
+            st.session_state.attendees = {
+                p['id']: p for p in st.session_state.all_players if attendee_selections.get(p['id'])
+            }
+            st.session_state.waiting_players = list(st.session_state.attendees.values())
+            st.session_state.session_started = True
+            st.rerun()
 
 else: # Session is active
-    # --- Session Status and Controls ---
+    # --- Matchmaking Logic ---
+    def create_new_round():
+        # Combine waiting and finished players for the new round
+        available_players = st.session_state.waiting_players + st.session_state.finished_players
+        st.session_state.finished_players = []
+        
+        # Separate winners and losers
+        winners = [p for p in available_players if st.session_state.last_match_result.get(p['id']) == 'win']
+        losers = [p for p in available_players if st.session_state.last_match_result.get(p['id']) == 'loss']
+        neutral = [p for p in available_players if p['id'] not in st.session_state.last_match_result]
+        
+        # Shuffle each pool to add randomness
+        random.shuffle(winners)
+        random.shuffle(losers)
+        random.shuffle(neutral)
+
+        # Prioritize matching winners with winners, losers with losers
+        potential_players = winners + losers + neutral
+        
+        while len(potential_players) >= 4 and len(st.session_state.active_games) < MAX_COURTS:
+            game_players = potential_players[:4]
+            potential_players = potential_players[4:]
+
+            game_players.sort(key=lambda p: p['skill'], reverse=True)
+            team1 = [game_players[0], game_players[3]]
+            team2 = [game_players[1], game_players[2]]
+
+            used_court_ids = {g['court_id'] for g in st.session_state.active_games}
+            next_court_id = next(i for i in range(1, MAX_COURTS + 2) if i not in used_court_ids)
+
+            st.session_state.active_games.append({
+                'court_id': next_court_id,
+                'team1': team1,
+                'team2': team2,
+            })
+        
+        # Remaining players go back to the waiting pool
+        st.session_state.waiting_players = potential_players
+
+
+    # --- Main Display Logic ---
     st.header("Session Status")
     
-    # Check for finished games and session end
-    now = datetime.datetime.now()
-    games_to_finish = [game for game in st.session_state.active_games if now >= game['end_time']]
+    # If no games are active, and there are players waiting, start a new round
+    if not st.session_state.active_games and (st.session_state.waiting_players or st.session_state.finished_players):
+        create_new_round()
+        st.rerun()
+
+    # --- Player Pools Display ---
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Waiting for Next Game")
+        if not st.session_state.waiting_players:
+            st.info("No players are waiting.")
+        else:
+            player_tags = [f"{p['name']} ({SKILL_MAP[p['skill']]})" for p in st.session_state.waiting_players]
+            st.write(" | ".join(player_tags))
     
-    if games_to_finish:
-        for game in games_to_finish:
-            st.session_state.waiting_players.extend(game['team1'])
-            st.session_state.waiting_players.extend(game['team2'])
-        st.session_state.active_games = [g for g in st.session_state.active_games if g not in games_to_finish]
-        st.toast("A game has finished! Players are back in the waiting pool.")
+    with col2:
+        st.subheader("Finished, Waiting for Round to End")
+        if not st.session_state.finished_players:
+            st.info("No players have finished yet.")
+        else:
+            player_tags = [f"{p['name']} ({SKILL_MAP[p['skill']]})" for p in st.session_state.finished_players]
+            st.write(" | ".join(player_tags))
 
-    if st.session_state.session_end_time and now >= st.session_state.session_end_time:
-        st.success("Session finished!")
-        for key in ['session_started', 'is_auto_mode', 'session_end_time', 'active_games', 'waiting_players', 'attendees']:
-            st.session_state[key] = None if key == 'session_end_time' else (False if isinstance(st.session_state[key], bool) else [])
-        time.sleep(2)
-        st.rerun()
-
-    # Auto-generate game in auto mode
-    if st.session_state.is_auto_mode and len(st.session_state.waiting_players) >= 4 and len(st.session_state.active_games) < MAX_COURTS:
-        # This block will attempt to create a game on every rerun if conditions are met
-        shuffled = random.sample(st.session_state.waiting_players, len(st.session_state.waiting_players))
-        game_players = shuffled[:4]
-        game_players.sort(key=lambda p: p['skill'], reverse=True)
-        
-        team1 = [game_players[0], game_players[3]]
-        team2 = [game_players[1], game_players[2]]
-        
-        st.session_state.waiting_players = [p for p in st.session_state.waiting_players if p not in game_players]
-        
-        used_court_ids = {g['court_id'] for g in st.session_state.active_games}
-        next_court_id = next(i for i in range(1, MAX_COURTS + 1) if i not in used_court_ids)
-        
-        duration = random.randint(MIN_GAME_MINUTES, MAX_GAME_MINUTES)
-        end_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
-        
-        st.session_state.active_games.append({
-            'court_id': next_court_id,
-            'team1': team1,
-            'team2': team2,
-            'end_time': end_time
-        })
-        st.toast(f"Auto-generated a new game on Court {next_court_id}!")
-
-
-    # Display Session Info
-    mode = "Auto-Pilot" if st.session_state.is_auto_mode else "Manual"
-    st.subheader(f"Mode: {mode}")
-    if st.session_state.session_end_time:
-        time_left = st.session_state.session_end_time - now
-        st.metric("Session Time Remaining", format_time_delta(time_left))
-
-    # --- Waiting Players and Manual Generation ---
-    st.header("2. Waiting Players")
-    if not st.session_state.waiting_players:
-        st.info("No players are currently waiting.")
-    else:
-        sorted_waiting = sorted(st.session_state.waiting_players, key=lambda p: p['skill'], reverse=True)
-        player_tags = [f"{p['name']} ({SKILL_MAP[p['skill']]})" for p in sorted_waiting]
-        st.write(" | ".join(player_tags))
-
-    can_generate = len(st.session_state.waiting_players) >= 4 and len(st.session_state.active_games) < MAX_COURTS
-    if st.button("Generate Balanced Game", disabled=not can_generate):
-        # Manual game generation logic (same as auto)
-        shuffled = random.sample(st.session_state.waiting_players, len(st.session_state.waiting_players))
-        game_players = shuffled[:4]
-        game_players.sort(key=lambda p: p['skill'], reverse=True)
-        team1, team2 = [game_players[0], game_players[3]], [game_players[1], game_players[2]]
-        st.session_state.waiting_players = [p for p in st.session_state.waiting_players if p not in game_players]
-        used_court_ids = {g['court_id'] for g in st.session_state.active_games}
-        next_court_id = next(i for i in range(1, MAX_COURTS + 1) if i not in used_court_ids)
-        duration = random.randint(MIN_GAME_MINUTES, MAX_GAME_MINUTES)
-        end_time = datetime.datetime.now() + datetime.timedelta(minutes=duration)
-        st.session_state.active_games.append({'court_id': next_court_id, 'team1': team1, 'team2': team2, 'end_time': end_time})
-        st.rerun()
-
-    # --- Active Courts ---
-    st.header("3. Active Courts")
+    # --- Active Courts Display ---
+    st.header("Active Courts")
     if not st.session_state.active_games:
-        st.info("All courts are free.")
+        st.success("All courts are free! A new round will start shortly.")
     else:
         sorted_games = sorted(st.session_state.active_games, key=lambda g: g['court_id'])
         cols = st.columns(MAX_COURTS)
@@ -220,17 +180,34 @@ else: # Session is active
                     team1_names = f"{game['team1'][0]['name']} & {game['team1'][1]['name']}"
                     team2_names = f"{game['team2'][0]['name']} & {game['team2'][1]['name']}"
                     st.markdown(f"**{team1_names}** vs **{team2_names}**")
-                    time_left = game['end_time'] - now
-                    st.metric("Time Left", format_time_delta(time_left))
+                    
+                    score_col1, score_col2 = st.columns(2)
+                    with score_col1:
+                        score1 = st.number_input("Team 1 Score", min_value=0, max_value=30, key=f"s1_{game['court_id']}")
+                    with score_col2:
+                        score2 = st.number_input("Team 2 Score", min_value=0, max_value=30, key=f"s2_{game['court_id']}")
+                    
+                    if st.button("Finish Game & Submit Score", key=f"fin_{game['court_id']}", use_container_width=True):
+                        # Determine winners and losers
+                        winners, losers = (game['team1'], game['team2']) if score1 > score2 else (game['team2'], game['team1'])
+                        
+                        # Update last match result for each player
+                        for p in winners:
+                            st.session_state.last_match_result[p['id']] = 'win'
+                        for p in losers:
+                            st.session_state.last_match_result[p['id']] = 'loss'
+                            
+                        # Move players to the finished pool
+                        st.session_state.finished_players.extend(game['team1'])
+                        st.session_state.finished_players.extend(game['team2'])
+                        
+                        # Remove game from active list
+                        st.session_state.active_games = [g for g in st.session_state.active_games if g['court_id'] != game['court_id']]
+                        st.rerun()
 
     # --- Session Controls ---
     st.divider()
-    col1, col2 = st.columns([1,5])
-    with col1:
-        if st.button("End Session", type="primary"):
-            # Reset all session-related state
-            for key in ['session_started', 'is_auto_mode', 'session_end_time', 'active_games', 'waiting_players', 'attendees']:
-                 st.session_state[key] = None if key == 'session_end_time' else (False if isinstance(st.session_state[key], bool) else [])
-            st.rerun()
-    with col2:
-        st.button("Refresh Status", on_click=st.rerun) # Force a rerun to update timers
+    if st.button("End Session", type="primary"):
+        for key in ['session_started', 'attendees', 'waiting_players', 'finished_players', 'active_games', 'last_match_result']:
+            st.session_state[key] = False if isinstance(st.session_state.get(key), bool) else ([] if isinstance(st.session_state.get(key), list) else {})
+        st.rerun()
