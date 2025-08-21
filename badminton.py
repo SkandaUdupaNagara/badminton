@@ -2,7 +2,6 @@ import streamlit as st
 import time
 import random
 import datetime
-from streamlit_autorefresh import st_autorefresh
 
 # --- App Configuration ---
 st.set_page_config(page_title="Badminton Scheduler", layout="wide")
