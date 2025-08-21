@@ -28,6 +28,9 @@ def initialize_state():
         # Tracks who played with/against whom
         # {'player_id': {'with': {id1, id2}, 'against': {id3, id4}}}
         st.session_state.player_history = {}
+    if 'game_stats' not in st.session_state:
+        # List to store completed game statistics
+        st.session_state.game_stats = []
 
 
 # --- Main App Logic ---
@@ -197,6 +200,15 @@ else: # Session is active
                         score2 = st.number_input("Team 2 Score", min_value=0, max_value=30, key=f"s2_{game['court_id']}")
                     
                     if st.button("Finish Game & Submit Score", key=f"fin_{game['court_id']}", use_container_width=True):
+                        # Log game stats before removing
+                        st.session_state.game_stats.append({
+                            "court": game['court_id'],
+                            "team1": team1_names,
+                            "team2": team2_names,
+                            "score": f"{score1} - {score2}",
+                            "timestamp": datetime.datetime.now()
+                        })
+
                         # Move players back to the waiting pool
                         st.session_state.waiting_players.extend(game['team1'])
                         st.session_state.waiting_players.extend(game['team2'])
@@ -204,10 +216,25 @@ else: # Session is active
                         # Remove game from active list
                         st.session_state.active_games = [g for g in st.session_state.active_games if g['court_id'] != game['court_id']]
                         st.rerun()
+    
+    st.divider()
+
+    # --- Completed Games Display ---
+    with st.expander("Show Completed Games Log"):
+        if not st.session_state.game_stats:
+            st.info("No games have been completed yet.")
+        else:
+            # Display stats in reverse chronological order
+            for stat in reversed(st.session_state.game_stats):
+                st.markdown(
+                    f"**Court {stat['court']}** ({stat['timestamp'].strftime('%H:%M:%S')}): "
+                    f"{stat['team1']} vs {stat['team2']}  -  **Score: {stat['score']}**"
+                )
+                st.divider()
+
 
     # --- Session Controls ---
-    st.divider()
     if st.button("End Session", type="primary"):
-        for key in ['session_started', 'attendees', 'waiting_players', 'active_games', 'player_history']:
+        for key in ['session_started', 'attendees', 'waiting_players', 'active_games', 'player_history', 'game_stats']:
             st.session_state[key] = False if isinstance(st.session_state.get(key), bool) else ([] if isinstance(st.session_state.get(key), list) else {})
         st.rerun()
