@@ -237,7 +237,10 @@ def render_main_dashboard(live_state, players_db):
                             st.rerun()
     with tab_log:
         st.subheader("📊 Completed Games Log")
-        log_docs = LOG_COLLECTION_REF.order_by("Finish Time", direction=firestore.Query.DESCENDING).stream()
+        log_docs = (
+                LOG_COLLECTION_REF
+                .order_by("`Finish Time`", direction=firestore.Query.DESCENDING)
+                .stream())
         log_data = [doc.to_dict() for doc in log_docs]
         if not log_data: st.info("No games logged yet.")
         else:
