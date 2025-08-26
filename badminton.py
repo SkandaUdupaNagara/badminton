@@ -142,7 +142,6 @@ def get_fair_player_selection(live_state: dict, players_db: dict) -> Optional[Li
     if len(waiting_pids) < 4: return None
     players = get_players_from_ids(waiting_pids, players_db)
     
-    # Handle case where timestamps might not be deserialized yet
     for p in players:
         if 'last_played' in p and isinstance(p['last_played'], str):
              p['last_played'] = datetime.datetime.fromisoformat(p['last_played'])
@@ -216,7 +215,9 @@ def render_main_dashboard(live_state, players_db):
                             for pid in all_player_ids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                             finish_time = datetime.datetime.now()
                             duration = finish_time - start_time
-                            log = {'Finish Time': finish_time, 'Duration': f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s", 'Court': cid_str,
+                            
+                            # --- FIX: Use 'finish_time' (no space) as the key ---
+                            log = {'finish_time': finish_time, 'Duration': f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s", 'Court': cid_str,
                                    'Team 1 Players': " & ".join([p['name'] for p in team1_players]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players]),
                                    'Score': f"{t1s} - {t2s}", 'Winner': "Draw" if t1s == t2s else "Team 1" if t1s > t2s else "Team 2"}
                             LOG_COLLECTION_REF.add(log)
@@ -254,7 +255,6 @@ def render_main_dashboard(live_state, players_db):
                             if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'skill': skill, 'gender': gender, 'check_in_time': firestore.SERVER_TIMESTAMP})
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([pid]), 'waiting_players': firestore.ArrayUnion([pid])})
-                                # --- SYNTAX FIX HERE ---
                                 st.session_state.show_confirm_for = None
                                 st.cache_data.clear()
                                 st.toast(f"Guest {p.get('name')} checked in!", icon="👍"); st.rerun()
@@ -262,20 +262,23 @@ def render_main_dashboard(live_state, players_db):
                             if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayRemove([pid]), 'waiting_players': firestore.ArrayRemove([pid])})
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'check_in_time': None})
-                                # --- SYNTAX FIX HERE ---
                                 st.session_state.show_confirm_for = None
                                 st.cache_data.clear()
                                 st.toast(f"{p.get('name')} checked out.", icon="👋"); st.rerun()
 
     with tab_log:
         st.subheader("📊 Completed Games Log")
-        log_docs = LOG_COLLECTION_REF.order_by("Finish Time", direction=firestore.Query.DESCENDING).stream()
+        # --- FIX: Use 'finish_time' (no space) for querying ---
+        log_docs = LOG_COLLECTION_REF.order_by("finish_time", direction=firestore.Query.DESCENDING).stream()
         log_data = [doc.to_dict() for doc in log_docs]
+        
         if not log_data: st.info("No games logged yet.")
         else:
             df = pd.DataFrame(log_data)
-            # Timestamps from Firestore are timezone-aware, convert to local for display
-            df['Finish Time'] = pd.to_datetime(df['Finish Time']).dt.tz_convert('Europe/London').dt.strftime('%H:%M')
+            # --- FIX: Use 'finish_time' for processing and rename for display ---
+            df['finish_time'] = pd.to_datetime(df['finish_time']).dt.tz_convert('Europe/London').dt.strftime('%H:%M')
+            df.rename(columns={'finish_time': 'Finish Time'}, inplace=True)
+            
             df = df[['Finish Time', 'Duration', 'Court', 'Team 1 Players', 'Team 2 Players', 'Score', 'Winner']]
             st.dataframe(df, use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode('utf-8')
