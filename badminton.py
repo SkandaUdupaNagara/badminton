@@ -4,9 +4,10 @@ import datetime
 import pandas as pd
 import random
 import string
+import json
 from typing import List, Dict, Any, Optional
 
-# --- NEW: Firebase Imports ---
+# --- Firebase Imports ---
 import firebase_admin
 from firebase_admin import credentials, firestore
 from streamlit_autorefresh import st_autorefresh
@@ -16,50 +17,23 @@ from streamlit_autorefresh import st_autorefresh
 # ────────────────────────────────────────────────────────────────────────────────
 
 # --- Page Config ---
-st.set_page_config(page_title="Acers Badminton Club 2025", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Badminton Pro", layout="wide", initial_sidebar_state="expanded")
 
-# --- Constants & Access Control ---
+# --- Constants ---
 MAX_COURTS = 4
 SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
-PASSWORD_REQUESTERS = ["Admin"]
-ADMIN_USERS = ["Skanda", "Jag"]
-ADMIN_PASSWORD = "AcersClub2025Secret"  # IMPORTANT: Change this password
 
-# --- Hard-coded Roster (Used only for the very first run) ---
-INITIAL_ROSTER = [
-    {'id': 999618798, 'name': 'Hari', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 992590180, 'name': 'Kiran', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 523873599, 'name': 'Sarvesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 923212060, 'name': 'Santhosh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 29884897, 'name': 'Siddarth', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 457970730, 'name': 'Raj', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 836747093, 'name': 'Rajesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 875687516, 'name': 'Raghu', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 728233281, 'name': 'Sampath', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 496785155, 'name': 'Bala', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 22922751, 'name': 'Jag', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 930974748, 'name': 'Ruchi', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 282622456, 'name': 'Allwin', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 997347498, 'name': 'Arifha', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 866438678, 'name': 'Chilli', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 316362406, 'name': 'Eshwar', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 917977450, 'name': 'Ganesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 690316923, 'name': 'Mahesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 534985622, 'name': 'Nithin', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 352992803, 'name': 'Pradeep', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 717323928, 'name': 'Roopa', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 507883481, 'name': 'Sreedhar', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 353393848, 'name': 'Sushma', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 473846635, 'name': 'Ushakanth', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 11475433, 'name': 'Vidya', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 276495561, 'name': 'Vikramraj', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 335425513, 'name': 'Nihira', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 482910357, 'name': 'Skanda', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
-    {'id': 361855841, 'name': 'Guest1', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
-    {'id': 73129631, 'name': 'Guest2', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
-    {'id': 327817360, 'name': 'Guest3', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
-    {'id': 235751907, 'name': 'Guest4', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
-]
+# --- MODIFIED: Load all secrets from st.secrets ---
+try:
+    ADMIN_PASSWORD = st.secrets.app_secrets.admin_password
+    PASSWORD_REQUESTERS = st.secrets.app_secrets.password_requesters
+    ADMIN_USERS = st.secrets.app_secrets.admin_users
+    INITIAL_ROSTER = json.loads(st.secrets.app_secrets.initial_roster_json)
+except (AttributeError, json.JSONDecodeError):
+    st.error("Your `secrets.toml` file is missing or misconfigured under the `[app_secrets]` section.")
+    st.info("Please ask an admin to configure the app secrets in the Streamlit Cloud dashboard.")
+    st.stop()
+
 
 # --- Custom CSS ---
 st.markdown("""<style>.main .block-container{padding:2rem 1rem 10rem}[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}.stButton>button{border-radius:.5rem;font-weight:500}.player-pill{display:inline-block;padding:6px 12px;margin:4px 4px 4px 0;border-radius:16px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}</style>""", unsafe_allow_html=True)
@@ -68,6 +42,7 @@ st.markdown("""<style>.main .block-container{padding:2rem 1rem 10rem}[data-testi
 def init_firebase():
     try:
         if not firebase_admin._apps:
+            # Use st.secrets for Firebase credentials
             cred = credentials.Certificate(dict(st.secrets["firebase_credentials"]))
             firebase_admin.initialize_app(cred)
         return firestore.client()
@@ -102,7 +77,7 @@ def get_shared_state():
     if not SESSION_DOC_REF: return {}
     
     default_state = {
-        'players_db': {str(p['id']): p for p in INITIAL_ROSTER}, # KEY FIX: Keys must be strings
+        'players_db': {str(p['id']): p for p in INITIAL_ROSTER},
         'attendees': [], 'waiting_players': [], 'active_games': {},
         'game_log': [], 'session_password': generate_password()
     }
@@ -138,7 +113,7 @@ def initialize_local_state():
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
-    st.title("🏸 Acers Club  Scheduler")
+    st.title("🏸 Badminton Pro Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
         player_db = shared_state.get('players_db', {})
@@ -220,7 +195,7 @@ def end_game(court_id: int, t1_score: int, t2_score: int, state: dict):
 # ────────────────────────────────────────────────────────────────────────────────
 def render_sidebar(state):
     with st.sidebar:
-        st.title("🏸 Acers Club 2025")
+        st.title("🏸 Badminton Pro")
         st.markdown(f"Welcome, **{st.session_state.logged_in_user}**!")
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None; st.session_state.password_revealed = False; st.rerun()
@@ -314,7 +289,6 @@ def render_main_dashboard(state):
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
-
 if not db:
     st.error("Could not connect to Firebase. App cannot continue.")
 else:
