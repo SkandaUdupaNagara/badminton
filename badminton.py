@@ -99,11 +99,10 @@ def deserialize_timestamps(obj):
     return obj
 
 def get_shared_state():
-    """Fetch, validate, and deserialize the shared session state from Firestore."""
     if not SESSION_DOC_REF: return {}
     
     default_state = {
-        'players_db': {p['id']: p for p in INITIAL_ROSTER},
+        'players_db': {str(p['id']): p for p in INITIAL_ROSTER}, # KEY FIX: Keys must be strings
         'attendees': [], 'waiting_players': [], 'active_games': {},
         'game_log': [], 'session_password': generate_password()
     }
@@ -111,21 +110,19 @@ def get_shared_state():
     doc = SESSION_DOC_REF.get()
     if doc.exists:
         state = doc.to_dict()
-        # --- ROBUSTNESS FIX: Ensure all essential keys exist ---
         updated = False
         for key, default_value in default_state.items():
             if key not in state:
                 state[key] = default_value
                 updated = True
         if updated:
-            set_shared_state(state) # Heal the remote state if keys were missing
+            set_shared_state(state)
         return deserialize_timestamps(state)
     else:
-        set_shared_state(default_state) # Create the document for the first time
+        set_shared_state(default_state)
         return default_state
 
 def set_shared_state(state):
-    """Serialize and update the shared session state in Firestore."""
     if SESSION_DOC_REF:
         SESSION_DOC_REF.set(serialize_timestamps(state))
 
@@ -136,24 +133,16 @@ def generate_password():
     return "".join(random.choices(string.digits, k=6))
 
 def initialize_local_state():
-    """Initializes browser-local session state (for UI interaction)."""
-    if 'logged_in_user' not in st.session_state:
-        st.session_state.logged_in_user = None
-    if 'password_revealed' not in st.session_state:
-        st.session_state.password_revealed = False
-    if 'show_confirm_for' not in st.session_state:
-        st.session_state.show_confirm_for = None
+    if 'logged_in_user' not in st.session_state: st.session_state.logged_in_user = None
+    if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
+    if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
     st.title("🏸 Badminton Pro Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
-        # --- ROBUSTNESS FIX: Use .get() to avoid KeyErrors ---
         player_db = shared_state.get('players_db', {})
-        player_names = sorted([
-            p.get('name') for p in player_db.values()
-            if p.get('name') and not p.get('is_guest', False)
-        ])
+        player_names = sorted([p.get('name') for p in player_db.values() if p.get('name') and not p.get('is_guest', False)])
         
         selected_user = st.selectbox("Select your name", player_names)
         password = st.text_input("Session Password", type="password")
@@ -164,7 +153,7 @@ def render_login_page(shared_state):
                 st.session_state.logged_in_user = selected_user
                 player_obj = next((p for p in player_db.values() if p.get('name') == selected_user), None)
                 if player_obj and player_obj.get('id') not in shared_state.get('attendees', []):
-                    shared_state['players_db'][player_obj['id']]['check_in_time'] = datetime.datetime.now()
+                    shared_state['players_db'][str(player_obj['id'])]['check_in_time'] = datetime.datetime.now()
                     shared_state['attendees'].append(player_obj['id'])
                     add_to_waiting_list(player_obj['id'], shared_state)
                     set_shared_state(shared_state)
@@ -187,7 +176,7 @@ def render_login_page(shared_state):
 # ────────────────────────────────────────────────────────────────────────────────
 Player = Dict[str, Any]
 
-def get_player(pid: int, state: dict) -> Optional[Player]: return state.get('players_db', {}).get(pid)
+def get_player(pid: int, state: dict) -> Optional[Player]: return state.get('players_db', {}).get(str(pid))
 def get_players_from_ids(pids: List[int], state: dict) -> List[Player]: return [p for pid in pids if (p := get_player(pid, state))]
 def format_time_delta(delta: datetime.timedelta) -> str:
     total_seconds = int(delta.total_seconds());
@@ -211,9 +200,9 @@ def create_balanced_teams(players: List[Player]) -> (List[Player], List[Player])
 def start_game(court_id: int, players: List[Player], state: dict):
     team1, team2 = create_balanced_teams(players); pids = [p['id'] for p in players]
     remove_from_waiting_list(pids, state); update_last_played(pids, state)
-    state['active_games'][court_id] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': datetime.datetime.now()}
+    state['active_games'][str(court_id)] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': datetime.datetime.now()}
 def end_game(court_id: int, t1_score: int, t2_score: int, state: dict):
-    game = state.get('active_games', {}).pop(court_id, None)
+    game = state.get('active_games', {}).pop(str(court_id), None)
     if game:
         finish_time = datetime.datetime.now()
         duration = finish_time - game.get('start_time', finish_time)
@@ -236,7 +225,7 @@ def render_sidebar(state):
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None; st.session_state.password_revealed = False; st.rerun()
         st.markdown("---")
-        attendees = len(state.get('attendees', [])); waiting = len(state.get('waiting_players', [])); on_court = sum(len(g.get('player_ids', [])) for g in state.get('active_games', {}).values())
+        attendees, waiting, on_court = len(state.get('attendees', [])), len(state.get('waiting_players', [])), sum(len(g.get('player_ids', [])) for g in state.get('active_games', {}).values())
         c1, c2, c3 = st.columns(3); c1.metric("Present", attendees); c2.metric("Waiting", waiting); c3.metric("On Court", on_court)
         st.markdown("---")
         if st.session_state.logged_in_user in ADMIN_USERS:
@@ -253,7 +242,6 @@ def render_sidebar(state):
 
 def render_main_dashboard(state):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
-    # (Rest of the main dashboard rendering code is substantively the same, just with .get() for safety)
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
         sorted_waiting = sorted(get_players_from_ids(state.get('waiting_players', []), state), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))
@@ -264,7 +252,7 @@ def render_main_dashboard(state):
         st.markdown("<br>", unsafe_allow_html=True); st.subheader("🏸 Active Courts")
         court_cols = st.columns(2)
         for i in range(MAX_COURTS):
-            cid, game = i + 1, state.get('active_games', {}).get(i + 1)
+            cid, game = i + 1, state.get('active_games', {}).get(str(i + 1))
             with court_cols[i % 2]:
                 with st.container(border=True):
                     st.markdown(f"<h4>Court {cid}</h4>", unsafe_allow_html=True)
@@ -304,12 +292,12 @@ def render_main_dashboard(state):
                             skill = st.select_slider("Skill", [1,2,3], p.get('skill',2), format_func=SKILL_MAP.get, key=f"sk_{pid}")
                             gender = st.radio("Gender", ["Men","Women"], 0 if p.get('gender')!='Women' else 1, key=f"gen_{pid}", horizontal=True)
                             if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
-                                state['players_db'][pid].update({'skill': skill, 'gender': gender, 'check_in_time': datetime.datetime.now()})
+                                state['players_db'][str(pid)].update({'skill': skill, 'gender': gender, 'check_in_time': datetime.datetime.now()})
                                 state['attendees'].append(pid); add_to_waiting_list(pid, state)
                                 st.session_state.show_confirm_for=None; set_shared_state(state); st.toast(f"Guest in!", icon="👍"); st.rerun()
                         if is_present:
                             if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
-                                if 'check_in_time' in state['players_db'][pid]: state['players_db'][pid]['check_in_time'] = None
+                                if 'check_in_time' in state['players_db'][str(pid)]: state['players_db'][str(pid)]['check_in_time'] = None
                                 state['attendees'] = [att_id for att_id in state['attendees'] if att_id != pid]; remove_from_waiting_list([pid], state)
                                 st.session_state.show_confirm_for=None; set_shared_state(state); st.toast(f"{p.get('name')} out.", icon="👋"); st.rerun()
     with tab_log:
@@ -323,10 +311,10 @@ def render_main_dashboard(state):
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Log (CSV)", csv, f"badminton_log_{datetime.date.today()}.csv", "text/csv", use_container_width=True)
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
+
 if not db:
     st.error("Could not connect to Firebase. App cannot continue.")
 else:
