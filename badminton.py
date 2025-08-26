@@ -86,12 +86,15 @@ def get_shared_state():
     if doc.exists:
         state = doc.to_dict()
         updated = False
+        # --- ROBUSTNESS FIX: Check for key existence AND correct type ---
         for key, default_value in default_state.items():
-            if key not in state:
+            if key not in state or not isinstance(state.get(key), type(default_value)):
                 state[key] = default_value
                 updated = True
+        
         if updated:
-            set_shared_state(state)
+            set_shared_state(state) # Heal the remote state if schema was incorrect
+            
         return deserialize_timestamps(state)
     else:
         set_shared_state(default_state)
