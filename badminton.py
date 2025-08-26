@@ -137,7 +137,7 @@ def initialize_local_state():
         st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
-    st.title("🏸 Badminton Pro Scheduler")
+    st.title("🏸 Acers Club Badminton Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
         player_names = sorted([p['name'] for p in shared_state['players_db'].values() if not p['is_guest']])
