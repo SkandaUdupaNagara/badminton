@@ -16,7 +16,7 @@ from streamlit_autorefresh import st_autorefresh
 # ────────────────────────────────────────────────────────────────────────────────
 
 # --- Page Config ---
-st.set_page_config(page_title="Badminton Pro", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Acers Club 2025", layout="wide", initial_sidebar_state="expanded")
 
 # --- Constants & Access Control ---
 MAX_COURTS = 4
@@ -138,7 +138,7 @@ def initialize_local_state():
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
-    st.title("🏸 Acers Club Badminton Scheduler")
+    st.title("🏸 Acers Club  Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
         player_db = shared_state.get('players_db', {})
