@@ -16,12 +16,12 @@ from streamlit_autorefresh import st_autorefresh
 # ────────────────────────────────────────────────────────────────────────────────
 
 # --- Page Config ---
-st.set_page_config(page_title="Acers Club 2025", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Acers Badminton Club 2025", layout="wide", initial_sidebar_state="expanded")
 
 # --- Constants & Access Control ---
 MAX_COURTS = 4
 SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
-PASSWORD_REQUESTERS = ["Jag", "Chilli", "Raj", "Roopa", "Santhosh", "Skanda"]
+PASSWORD_REQUESTERS = ["Admin"]
 ADMIN_USERS = ["Skanda", "Jag"]
 ADMIN_PASSWORD = "AcersClub2025Secret"  # IMPORTANT: Change this password
 
