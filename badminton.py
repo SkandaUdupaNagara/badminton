@@ -23,7 +23,7 @@ MAX_COURTS = 4
 SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
 PASSWORD_REQUESTERS = ["Jag", "Chilli", "Raj", "Roopa", "Santhosh", "Skanda"]
 ADMIN_USERS = ["Skanda", "Jag"]
-ADMIN_PASSWORD = "Club2025Secret"  # IMPORTANT: Change this password
+ADMIN_PASSWORD = "AcersClub2025Secret"  # IMPORTANT: Change this password
 
 # --- Hard-coded Roster (Used only for the very first run) ---
 INITIAL_ROSTER = [
@@ -138,7 +138,7 @@ def initialize_local_state():
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
-    st.title("🏸 Badminton Pro Scheduler")
+    st.title("🏸 Acers Club Badminton Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
         player_db = shared_state.get('players_db', {})
@@ -220,7 +220,7 @@ def end_game(court_id: int, t1_score: int, t2_score: int, state: dict):
 # ────────────────────────────────────────────────────────────────────────────────
 def render_sidebar(state):
     with st.sidebar:
-        st.title("🏸 Badminton Pro")
+        st.title("🏸 Acers Club 2025")
         st.markdown(f"Welcome, **{st.session_state.logged_in_user}**!")
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None; st.session_state.password_revealed = False; st.rerun()
