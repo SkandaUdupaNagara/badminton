@@ -141,10 +141,12 @@ def get_fair_player_selection(live_state: dict, players_db: dict) -> Optional[Li
     waiting_pids = live_state.get('waiting_players', [])
     if len(waiting_pids) < 4: return None
     players = get_players_from_ids(waiting_pids, players_db)
-    # Deserialize Firestore timestamps before sorting
+    
+    # Handle case where timestamps might not be deserialized yet
     for p in players:
         if 'last_played' in p and isinstance(p['last_played'], str):
              p['last_played'] = datetime.datetime.fromisoformat(p['last_played'])
+
     return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))[:4]
 
 def create_balanced_teams(players: List[dict]) -> (List[dict], List[dict]):
@@ -177,7 +179,7 @@ def render_main_dashboard(live_state, players_db):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
-        sorted_waiting = get_fair_player_selection(live_state, players_db) or [] # Use fair selection to sort display
+        sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))
         if not sorted_waiting: st.info("Waiting list is empty.")
         else:
             pills = [f"<div class='player-pill' style='{'border: 2px solid #9067C6;' if i<4 else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(sorted_waiting)]
@@ -212,12 +214,14 @@ def render_main_dashboard(live_state, players_db):
                             all_player_ids = game_to_log.get('player_ids', [])
                             STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': firestore.ArrayUnion(all_player_ids)})
                             for pid in all_player_ids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                            log = {'Finish Time': firestore.SERVER_TIMESTAMP, 'Duration': f"{int(elapsed.total_seconds() // 60)}m {int(elapsed.total_seconds() % 60)}s", 'Court': cid_str,
+                            finish_time = datetime.datetime.now()
+                            duration = finish_time - start_time
+                            log = {'Finish Time': finish_time, 'Duration': f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s", 'Court': cid_str,
                                    'Team 1 Players': " & ".join([p['name'] for p in team1_players]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players]),
                                    'Score': f"{t1s} - {t2s}", 'Winner': "Draw" if t1s == t2s else "Team 1" if t1s > t2s else "Team 2"}
                             LOG_COLLECTION_REF.add(log)
                             st.rerun()
-                    else:
+                    else: 
                         st.success("Court is available!")
                         next_up = get_fair_player_selection(live_state, players_db)
                         if st.button("Auto Assign", key=f"auto_{cid_str}", use_container_width=True, type="primary", disabled=(not next_up)):
@@ -235,8 +239,7 @@ def render_main_dashboard(live_state, players_db):
         filtered = [p for p in players_db.values() if search.lower() in p.get('name', '').lower()]
         
         for i, p in enumerate(sorted(filtered, key=lambda x: x.get('name', ''))):
-            pid = p['id']
-            is_present = pid in live_state.get('attendees', [])
+            pid, is_present = p['id'], p['id'] in live_state.get('attendees', [])
             with cols[i % 3]:
                 if st.button(f"{'✅ ' if is_present else ''}{p.get('name')}", key=f"btn_{pid}", use_container_width=True):
                     st.session_state.show_confirm_for = pid if st.session_state.show_confirm_for != pid else None
@@ -251,13 +254,17 @@ def render_main_dashboard(live_state, players_db):
                             if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'skill': skill, 'gender': gender, 'check_in_time': firestore.SERVER_TIMESTAMP})
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([pid]), 'waiting_players': firestore.ArrayUnion([pid])})
-                                st.session_state.show_confirm_for, st.cache_data.clear() == None, None
+                                # --- SYNTAX FIX HERE ---
+                                st.session_state.show_confirm_for = None
+                                st.cache_data.clear()
                                 st.toast(f"Guest {p.get('name')} checked in!", icon="👍"); st.rerun()
                         if is_present:
                             if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayRemove([pid]), 'waiting_players': firestore.ArrayRemove([pid])})
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'check_in_time': None})
-                                st.session_state.show_confirm_for, st.cache_data.clear() = None, None
+                                # --- SYNTAX FIX HERE ---
+                                st.session_state.show_confirm_for = None
+                                st.cache_data.clear()
                                 st.toast(f"{p.get('name')} checked out.", icon="👋"); st.rerun()
 
     with tab_log:
@@ -267,7 +274,8 @@ def render_main_dashboard(live_state, players_db):
         if not log_data: st.info("No games logged yet.")
         else:
             df = pd.DataFrame(log_data)
-            df['Finish Time'] = pd.to_datetime(df['Finish Time']).dt.strftime('%H:%M')
+            # Timestamps from Firestore are timezone-aware, convert to local for display
+            df['Finish Time'] = pd.to_datetime(df['Finish Time']).dt.tz_convert('Europe/London').dt.strftime('%H:%M')
             df = df[['Finish Time', 'Duration', 'Court', 'Team 1 Players', 'Team 2 Players', 'Score', 'Winner']]
             st.dataframe(df, use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode('utf-8')
