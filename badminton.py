@@ -251,7 +251,7 @@ def render_main_dashboard(live_state, players_db):
                             if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'skill': skill, 'gender': gender, 'check_in_time': firestore.SERVER_TIMESTAMP})
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([pid]), 'waiting_players': firestore.ArrayUnion([pid])})
-                                st.session_state.show_confirm_for, st.cache_data.clear() = None, None
+                                st.session_state.show_confirm_for, st.cache_data.clear() == None, None
                                 st.toast(f"Guest {p.get('name')} checked in!", icon="👍"); st.rerun()
                         if is_present:
                             if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
