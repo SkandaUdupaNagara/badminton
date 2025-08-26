@@ -1,212 +1,323 @@
 import streamlit as st
 import time
-import random
 import datetime
-import itertools
+import pandas as pd
+import random
+import string
+from typing import List, Dict, Any, Optional
+
+# --- NEW: Firebase Imports ---
 import firebase_admin
 from firebase_admin import credentials, firestore
-import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# --- App Configuration ---
-st.set_page_config(page_title="Badminton Scheduler", layout="wide")
+# ────────────────────────────────────────────────────────────────────────────────
+# CONFIGURATION & INITIAL DATA
+# ────────────────────────────────────────────────────────────────────────────────
 
-# --- Firebase Initialization ---
+# --- Page Config ---
+st.set_page_config(page_title="Badminton Pro", layout="wide", initial_sidebar_state="expanded")
+
+# --- Constants & Access Control (Remains the same) ---
+MAX_COURTS = 4
+SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
+PASSWORD_REQUESTERS = ["Jag", "Chilli", "Raj", "Roopa", "Santhosh", "Skanda"]
+ADMIN_USERS = ["Skanda", "Jag"]
+ADMIN_PASSWORD = "AcersClub2025Secret"  # IMPORTANT: Change this password
+
+# --- Hard-coded Roster (Used only for the very first run) ---
+INITIAL_ROSTER = [
+    {'id': 999618798, 'name': 'Hari', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 992590180, 'name': 'Kiran', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 523873599, 'name': 'Sarvesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 923212060, 'name': 'Santhosh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 29884897, 'name': 'Siddarth', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 457970730, 'name': 'Raj', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 836747093, 'name': 'Rajesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 875687516, 'name': 'Raghu', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 728233281, 'name': 'Sampath', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 496785155, 'name': 'Bala', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 22922751, 'name': 'Jag', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 930974748, 'name': 'Ruchi', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 282622456, 'name': 'Allwin', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 997347498, 'name': 'Arifha', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 866438678, 'name': 'Chilli', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 316362406, 'name': 'Eshwar', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 917977450, 'name': 'Ganesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 690316923, 'name': 'Mahesh', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 534985622, 'name': 'Nithin', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 352992803, 'name': 'Pradeep', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 717323928, 'name': 'Roopa', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 507883481, 'name': 'Sreedhar', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 353393848, 'name': 'Sushma', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 473846635, 'name': 'Ushakanth', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 11475433, 'name': 'Vidya', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 276495561, 'name': 'Vikramraj', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 335425513, 'name': 'Nihira', 'gender': 'Women', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 482910357, 'name': 'Skanda', 'gender': 'Men', 'skill': 2, 'last_played': None, 'is_guest': False,},
+    {'id': 361855841, 'name': 'Guest1', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
+    {'id': 73129631, 'name': 'Guest2', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
+    {'id': 327817360, 'name': 'Guest3', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
+    {'id': 235751907, 'name': 'Guest4', 'gender': 'Men/Women', 'skill': 2, 'last_played': None, 'is_guest': True,},
+]
+
+# --- Custom CSS ---
+st.markdown("""<style>...</style>""", unsafe_allow_html=True) # Keeping CSS short for brevity
+
+# --- Firebase Integration ---
 def init_firebase():
-    """Initialize Firebase connection using Streamlit secrets."""
     try:
-        # Check if the app is already initialized
         if not firebase_admin._apps:
             cred = credentials.Certificate(dict(st.secrets["firebase_credentials"]))
             firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        st.error(f"Failed to initialize Firebase. Please check your secrets.toml file. Error: {e}")
-        return None
+        st.error(f"Firebase initialization failed: {e}"); return None
 
 db = init_firebase()
-
-# --- Constants & State Handling ---
-# We now use a single document in Firestore to hold the entire session state.
 SESSION_DOC_REF = db.collection("session").document("current_state") if db else None
 
-def get_session_state():
-    """Fetch the current session state from Firestore."""
+def serialize_timestamps(obj):
+    """Recursively convert datetime objects to ISO strings for Firestore."""
+    if isinstance(obj, dict):
+        return {k: serialize_timestamps(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [serialize_timestamps(elem) for elem in obj]
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()
+    return obj
+
+def deserialize_timestamps(obj):
+    """Recursively convert ISO strings back to datetime objects from Firestore."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and v.endswith('+00:00'):
+                try: obj[k] = datetime.datetime.fromisoformat(v)
+                except ValueError: pass
+            else:
+                obj[k] = deserialize_timestamps(v)
+    elif isinstance(obj, list):
+        return [deserialize_timestamps(elem) for elem in obj]
+    return obj
+
+def get_shared_state():
+    """Fetch, create, and deserialize the shared session state from Firestore."""
     if not SESSION_DOC_REF: return {}
     doc = SESSION_DOC_REF.get()
     if doc.exists:
-        return doc.to_dict()
+        return deserialize_timestamps(doc.to_dict())
     else:
-        # If no state exists, create a default one
         default_state = {
-            'all_players': [], 'session_started': False, 'attendees': {},
-            'waiting_players': [], 'active_games': [], 'player_history': {},
-            'game_stats': []
+            'players_db': {p['id']: p for p in INITIAL_ROSTER},
+            'attendees': [], 'waiting_players': [], 'active_games': {},
+            'game_log': [], 'session_password': generate_password()
         }
         SESSION_DOC_REF.set(default_state)
         return default_state
 
-def set_session_state(state):
-    """Update the session state in Firestore."""
+def set_shared_state(state):
+    """Serialize and update the shared session state in Firestore."""
     if SESSION_DOC_REF:
-        SESSION_DOC_REF.set(state)
+        serialized_state = serialize_timestamps(state)
+        SESSION_DOC_REF.set(serialized_state)
 
-# Load state at the beginning of the script run
-if db:
-    st.session_state.app_state = get_session_state()
-else:
-    st.session_state.app_state = {}
+# ────────────────────────────────────────────────────────────────────────────────
+# SESSION STATE & AUTH
+# ────────────────────────────────────────────────────────────────────────────────
+def generate_password():
+    return "".join(random.choices(string.digits, k=6))
 
+def initialize_local_state():
+    """Initializes browser-local session state (for UI interaction)."""
+    if 'logged_in_user' not in st.session_state:
+        st.session_state.logged_in_user = None
+    if 'password_revealed' not in st.session_state:
+        st.session_state.password_revealed = False
+    if 'show_confirm_for' not in st.session_state:
+        st.session_state.show_confirm_for = None
 
-MAX_COURTS = 4
-SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
+def render_login_page(shared_state):
+    st.title("🏸 Badminton Pro Scheduler")
+    st.write("Please log in to continue.")
+    with st.form("login_form"):
+        player_names = sorted([p['name'] for p in shared_state['players_db'].values() if not p['is_guest']])
+        selected_user = st.selectbox("Select your name", player_names)
+        password = st.text_input("Session Password", type="password")
+        submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
+        if submitted:
+            if password == shared_state['session_password']:
+                st.session_state.logged_in_user = selected_user
+                player_obj = next((p for p in shared_state['players_db'].values() if p['name'] == selected_user), None)
+                if player_obj and player_obj['id'] not in shared_state['attendees']:
+                    shared_state['players_db'][player_obj['id']]['check_in_time'] = datetime.datetime.now()
+                    shared_state['attendees'].append(player_obj['id'])
+                    add_to_waiting_list(player_obj['id'], shared_state)
+                    set_shared_state(shared_state)
+                    st.toast(f"Welcome, {selected_user}! You're checked in.", icon="✅")
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    with st.expander("Need the Password?"):
+        requester = st.selectbox("Confirm identity", options=PASSWORD_REQUESTERS, index=None)
+        if requester:
+            admin_pw = st.text_input("Enter Admin Password", type="password", key="admin_pw")
+            if st.button("Verify & Show"):
+                if admin_pw == ADMIN_PASSWORD: st.session_state.password_revealed = True
+                else: st.error("Incorrect Admin Password.")
+            if st.session_state.get("password_revealed"):
+                st.success(f"Password: **{shared_state['session_password']}**")
 
+# ────────────────────────────────────────────────────────────────────────────────
+# HELPER FUNCTIONS (Now operate on the 'state' dictionary)
+# ────────────────────────────────────────────────────────────────────────────────
+Player = Dict[str, Any]
 
-# --- Sidebar for Player Management ---
-with st.sidebar:
-    st.header("Player Roster")
-    with st.form("add_player_form", clear_on_submit=True):
-        new_player_name = st.text_input("Player Name")
-        new_player_skill = st.selectbox("Skill Level", options=list(SKILL_MAP.keys()), format_func=lambda x: SKILL_MAP[x], index=1)
-        if st.form_submit_button("Add Player"):
-            if new_player_name:
-                player_id = int(time.time() * 1000)
-                new_player = {'id': player_id, 'name': new_player_name, 'skill': new_player_skill}
-                st.session_state.app_state['all_players'].append(new_player)
-                set_session_state(st.session_state.app_state)
-                st.success(f"Added {new_player_name}")
+def get_player(pid: int, state: dict) -> Optional[Player]: return state['players_db'].get(pid)
+def get_players_from_ids(pids: List[int], state: dict) -> List[Player]: return [get_player(pid, state) for pid in pids if get_player(pid, state)]
+def format_time_delta(delta: datetime.timedelta) -> str:
+    total_seconds = int(delta.total_seconds());
+    if total_seconds < 0: return "00:00"
+    minutes, seconds = divmod(total_seconds, 60); return f"{minutes:02}:{seconds:02}"
+def add_to_waiting_list(pid: int, state: dict):
+    on_court_pids = {p for g in state['active_games'].values() for p in g['player_ids']}
+    if pid not in state['waiting_players'] and pid not in on_court_pids: state['waiting_players'].append(pid)
+def remove_from_waiting_list(pids: List[int], state: dict):
+    state['waiting_players'] = [pid for pid in state['waiting_players'] if pid not in pids]
+def update_last_played(pids: List[int], state: dict):
+    now = datetime.datetime.now();
+    for pid in pids:
+        if p := get_player(pid, state): p['last_played'] = now
+def get_fair_player_selection(state: dict) -> Optional[List[Player]]:
+    if len(state['waiting_players']) < 4: return None
+    players = get_players_from_ids(state['waiting_players'], state)
+    return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))[:4]
+def create_balanced_teams(players: List[Player]) -> (List[Player], List[Player]):
+    sp = sorted(players, key=lambda p: p.get('skill', 2), reverse=True); return [sp[0], sp[3]], [sp[1], sp[2]]
+def start_game(court_id: int, players: List[Player], state: dict):
+    team1, team2 = create_balanced_teams(players); pids = [p['id'] for p in players]
+    remove_from_waiting_list(pids, state); update_last_played(pids, state)
+    state['active_games'][court_id] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': datetime.datetime.now()}
+def end_game(court_id: int, t1_score: int, t2_score: int, state: dict):
+    game = state['active_games'].pop(court_id, None)
+    if game:
+        finish_time = datetime.datetime.now()
+        duration = finish_time - game['start_time']
+        duration_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
+        winner = "Draw" if t1_score == t2_score else "Team 1" if t1_score > t2_score else "Team 2"
+        log = {'Finish Time': finish_time, 'Duration': duration_str, 'Court': court_id,
+               'Team 1 Players': " & ".join([p['name'] for p in game['team1']]),
+               'Team 2 Players': " & ".join([p['name'] for p in game['team2']]),
+               'Score': f"{t1_score} - {t2_score}", 'Winner': winner}
+        state['game_log'].append(log)
+        for pid in game['player_ids']: add_to_waiting_list(pid, state)
+
+# ────────────────────────────────────────────────────────────────────────────────
+# UI RENDERING FUNCTIONS (Now accept 'state' dictionary)
+# ────────────────────────────────────────────────────────────────────────────────
+def render_sidebar(state):
+    with st.sidebar:
+        st.title("🏸 Badminton Pro")
+        st.markdown(f"Welcome, **{st.session_state.logged_in_user}**!")
+        if st.button("Logout", use_container_width=True):
+            st.session_state.logged_in_user = None; st.session_state.password_revealed = False; st.rerun()
+        st.markdown("---")
+        attendees = len(state['attendees']); waiting = len(state['waiting_players']); on_court = sum(len(g['player_ids']) for g in state['active_games'].values())
+        c1, c2, c3 = st.columns(3); c1.metric("Present", attendees); c2.metric("Waiting", waiting); c3.metric("On Court", on_court)
+        st.markdown("---")
+        if st.session_state.logged_in_user in ADMIN_USERS:
+            st.header("Admin Controls")
+            if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
+                current_players_db = state['players_db']
+                new_state = get_shared_state() # Fetch a clean slate
+                new_state['players_db'] = current_players_db # Keep the roster
+                new_state['session_password'] = generate_password()
+                set_shared_state(new_state)
                 st.rerun()
 
-    st.subheader("Current Players")
-    if not st.session_state.app_state.get('all_players'):
-        st.info("No players added yet.")
-    else:
-        sorted_players = sorted(st.session_state.app_state['all_players'], key=lambda p: p['name'])
-        for player in sorted_players:
-            col1, col2, col3 = st.columns([3, 2, 1])
-            col1.write(f"**{player['name']}**")
-            col2.write(f"_{SKILL_MAP[player['skill']]}_")
-            if col3.button("❌", key=f"del_{player['id']}", help=f"Remove {player['name']}"):
-                st.session_state.app_state['all_players'] = [p for p in st.session_state.app_state['all_players'] if p['id'] != player['id']]
-                set_session_state(st.session_state.app_state)
-                st.rerun()
-
-# --- Main Content Area ---
-st.title("🏸 Badminton Score & Scheduler")
-
-if not st.session_state.app_state.get('session_started'):
-    st.header("1. Mark Attendance")
-    all_players = st.session_state.app_state.get('all_players', [])
-    if not all_players:
-        st.warning("Please add players to the roster using the sidebar.")
-    else:
-        attendee_selections = {p['id']: st.checkbox(f"{p['name']} ({SKILL_MAP[p['skill']]})", key=f"att_{p['id']}") for p in sorted(all_players, key=lambda p: p['name'])}
-        num_attendees = sum(attendee_selections.values())
-        st.info(f"**{num_attendees}** players selected.")
-        if st.button("Start Session", disabled=(num_attendees < 4), type="primary", use_container_width=True):
-            st.session_state.app_state['attendees'] = {str(p['id']): p for p in all_players if attendee_selections.get(p['id'])}
-            st.session_state.app_state['waiting_players'] = list(st.session_state.app_state['attendees'].values())
-            st.session_state.app_state['player_history'] = {str(pid): {'with': [], 'against': []} for pid in st.session_state.app_state['attendees']}
-            st.session_state.app_state['session_started'] = True
-            set_session_state(st.session_state.app_state)
-            st.rerun()
-else: # Session is active
-    # --- Matchmaking Logic ---
-    def find_best_match(available_players, history):
-        best_match, max_variety_score = None, -1
-        for combo in itertools.combinations(available_players, 4):
-            variety_score = 0
-            for i, p1 in enumerate(combo):
-                p1_hist = history.get(str(p1['id']), {'with': [], 'against': []})
-                for j, p2 in enumerate(combo):
-                    if i == j: continue
-                    if p2['id'] not in p1_hist['with']: variety_score += 1
-                    if p2['id'] not in p1_hist['against']: variety_score += 1
-            if variety_score > max_variety_score:
-                max_variety_score, best_match = variety_score, list(combo)
-        return best_match
-
-    def create_new_games():
-        state = st.session_state.app_state
-        made_change = False
-        while len(state['waiting_players']) >= 4 and len(state['active_games']) < MAX_COURTS:
-            made_change = True
-            game_players = find_best_match(state['waiting_players'], state['player_history'])
-            if not game_players: break
-            state['waiting_players'] = [p for p in state['waiting_players'] if p not in game_players]
-            game_players.sort(key=lambda p: p['skill'], reverse=True)
-            team1, team2 = [game_players[0], game_players[3]], [game_players[1], game_players[2]]
-            
-            for p in team1:
-                p_id_str = str(p['id'])
-                state['player_history'][p_id_str]['with'].append(team1[1-team1.index(p)]['id'])
-                state['player_history'][p_id_str]['against'].extend([p2['id'] for p2 in team2])
-            for p in team2:
-                p_id_str = str(p['id'])
-                state['player_history'][p_id_str]['with'].append(team2[1-team2.index(p)]['id'])
-                state['player_history'][p_id_str]['against'].extend([p1['id'] for p1 in team1])
-
-            used_court_ids = {g['court_id'] for g in state['active_games']}
-            next_court_id = next(i for i in range(1, MAX_COURTS + 2) if i not in used_court_ids)
-            state['active_games'].append({'court_id': next_court_id, 'team1': team1, 'team2': team2})
-        
-        if made_change:
-            set_session_state(state)
-            st.rerun()
-
-    # --- Main Display Logic ---
-    st.header("Session Status")
-    create_new_games()
-
-    st.subheader("Waiting for Next Game")
-    waiting_players = st.session_state.app_state.get('waiting_players', [])
-    if not waiting_players: st.info("No players are waiting.")
-    else: st.write(" | ".join([f"{p['name']} ({SKILL_MAP[p['skill']]})" for p in waiting_players]))
-    
-    st.divider()
-    st.header("Active Courts")
-    active_games = st.session_state.app_state.get('active_games', [])
-    if not active_games: st.success("All courts are free!")
-    else:
-        cols = st.columns(MAX_COURTS)
-        for i, game in enumerate(sorted(active_games, key=lambda g: g['court_id'])):
-            with cols[i % MAX_COURTS]:
-                with st.container(border=True):
-                    st.subheader(f"Court {game['court_id']}")
-                    t1n, t2n = f"{game['team1'][0]['name']} & {game['team1'][1]['name']}", f"{game['team2'][0]['name']} & {game['team2'][1]['name']}"
-                    st.markdown(f"**{t1n}** vs **{t2n}**")
-                    s_col1, s_col2 = st.columns(2)
-                    score1 = s_col1.number_input("Team 1 Score", 0, 30, key=f"s1_{game['court_id']}")
-                    score2 = s_col2.number_input("Team 2 Score", 0, 30, key=f"s2_{game['court_id']}")
-                    if st.button("Finish Game", key=f"fin_{game['court_id']}", use_container_width=True):
-                        state = st.session_state.app_state
-                        state['game_stats'].append({"court": game['court_id'], "team1": t1n, "team2": t2n, "score": f"{score1}-{score2}", "timestamp": datetime.datetime.now().isoformat()})
-                        state['waiting_players'].extend(game['team1'])
-                        state['waiting_players'].extend(game['team2'])
-                        state['active_games'] = [g for g in state['active_games'] if g['court_id'] != game['court_id']]
-                        set_session_state(state)
-                        st.rerun()
-    
-    st.divider()
-    with st.expander("Show Completed Games Log"):
-        game_stats = st.session_state.app_state.get('game_stats', [])
-        if not game_stats: st.info("No games have been completed yet.")
+def render_main_dashboard(state):
+    tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
+    with tab_dashboard:
+        st.subheader("⏳ Waiting Queue")
+        sorted_waiting = sorted(get_players_from_ids(state['waiting_players'], state), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))
+        if not sorted_waiting: st.info("Waiting list is empty.")
         else:
-            df = pd.DataFrame(reversed(game_stats))
-            df['timestamp'] = pd.to_datetime(df['timestamp']).dt.strftime('%H:%M:%S')
-            st.dataframe(df, use_container_width=True)
-            
+            pills = [f"<div class='player-pill' style='{'border: 2px solid #9067C6;' if i<4 else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(sorted_waiting)]
+            st.markdown("".join(pills), unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True); st.subheader("🏸 Active Courts")
+        court_cols = st.columns(2)
+        for i in range(MAX_COURTS):
+            cid, game = i + 1, state['active_games'].get(i + 1)
+            with court_cols[i % 2]:
+                with st.container(border=True):
+                    st.markdown(f"<h4>Court {cid}</h4>", unsafe_allow_html=True)
+                    if game:
+                        st.markdown(f"**Team 1:** {' & '.join([p['name'] for p in game['team1']])}")
+                        st.markdown(f"**Team 2:** {' & '.join([p['name'] for p in game['team2']])}")
+                        st.metric("Time Elapsed", format_time_delta(datetime.datetime.now() - game['start_time']))
+                        s_cols = st.columns(2)
+                        t1s, t2s = s_cols[0].number_input("T1 Score", 0, step=1, key=f"t1s_{cid}"), s_cols[1].number_input("T2 Score", 0, step=1, key=f"t2s_{cid}")
+                        if st.button("Log Score & Finish", key=f"log_{cid}", use_container_width=True, type="primary"):
+                            end_game(cid, t1s, t2s, state); set_shared_state(state); st.rerun()
+                    else:
+                        st.success("Court is available!")
+                        next_up = get_fair_player_selection(state)
+                        if st.button("Auto Assign", key=f"auto_{cid}", use_container_width=True, type="primary", disabled=(not next_up)):
+                            start_game(cid, next_up, state); set_shared_state(state); st.rerun()
+                        if not next_up: st.caption("Need 4+ players.")
+                        with st.expander("Manual Selection"):
+                            opts = [(p['id'], p['name']) for p in sorted_waiting]
+                            sel = st.multiselect("Select 4", opts, format_func=lambda t: t[1], key=f"msel_{cid}", max_selections=4)
+                            if st.button("Assign", key=f"mbtn_{cid}", use_container_width=True, disabled=(len(sel)!=4)):
+                                start_game(cid, get_players_from_ids([t[0] for t in sel], state), state); set_shared_state(state); st.rerun()
+    with tab_guest_checkout:
+        st.subheader("Guest Check-in and Player Check-out")
+        search = st.text_input("Search player...", placeholder="Type name...")
+        cols = st.columns(3)
+        filtered = [p for p in state['players_db'].values() if search.lower() in p['name'].lower()]
+        for i, p in enumerate(sorted(filtered, key=lambda p: p['name'])):
+            pid, is_present = p['id'], p['id'] in state['attendees']
+            with cols[i % 3]:
+                if st.button(f"{'✅ ' if is_present else ''}{p['name']}", key=f"btn_{pid}", use_container_width=True):
+                    st.session_state.show_confirm_for = pid if st.session_state.show_confirm_for != pid else None
+                if st.session_state.show_confirm_for == pid:
+                    with st.container(border=True):
+                        st.write(f"**Status:** {'Present' if is_present else 'Not checked in'}")
+                        if p['is_guest'] and not is_present:
+                            skill = st.select_slider("Skill", [1,2,3], p.get('skill',2), format_func=SKILL_MAP.get, key=f"sk_{pid}")
+                            gender = st.radio("Gender", ["Men","Women"], 0 if p.get('gender')!='Women' else 1, key=f"gen_{pid}", horizontal=True)
+                            if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
+                                state['players_db'][pid].update({'skill': skill, 'gender': gender, 'check_in_time': datetime.datetime.now()})
+                                state['attendees'].append(pid); add_to_waiting_list(pid, state)
+                                st.session_state.show_confirm_for=None; set_shared_state(state); st.toast(f"Guest in!", icon="👍"); st.rerun()
+                        if is_present:
+                            if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
+                                if 'check_in_time' in state['players_db'][pid]: state['players_db'][pid]['check_in_time'] = None
+                                state['attendees'] = [att_id for att_id in state['attendees'] if att_id != pid]; remove_from_waiting_list([pid], state)
+                                st.session_state.show_confirm_for=None; set_shared_state(state); st.toast(f"{p['name']} out.", icon="👋"); st.rerun()
+    with tab_log:
+        st.subheader("📊 Completed Games Log")
+        if not state['game_log']: st.info("No games logged yet.")
+        else:
+            df = pd.DataFrame(state['game_log'])
+            df['Finish Time'] = pd.to_datetime(df['Finish Time']).dt.strftime('%H:%M')
+            df = df[['Finish Time', 'Duration', 'Court', 'Team 1 Players', 'Team 2 Players', 'Score', 'Winner']]
+            st.dataframe(df.iloc[::-1], use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("Export to CSV", data=csv, file_name='badminton_session_stats.csv', mime='text/csv')
+            st.download_button("📥 Download Log (CSV)", csv, f"badminton_log_{datetime.date.today()}.csv", "text/csv", use_container_width=True)
 
-    if st.button("End Session", type="primary"):
-        # Reset the state in Firestore
-        SESSION_DOC_REF.set({
-            'all_players': st.session_state.app_state.get('all_players', []), # Keep the roster
-            'session_started': False, 'attendees': {}, 'waiting_players': [], 
-            'active_games': [], 'player_history': {}, 'game_stats': []
-        })
-        st.rerun()
+# ────────────────────────────────────────────────────────────────────────────────
+# MAIN APP EXECUTION
+# ────────────────────────────────────────────────────────────────────────────────
 
-# This will auto-refresh the page every 5 seconds to sync state from Firestore
-st_autorefresh(interval=5000, key="state_refresher")
+if not db:
+    st.error("Could not connect to Firebase. App cannot continue.")
+else:
+    initialize_local_state()
+    shared_state = get_shared_state()
+    
+    if not st.session_state.logged_in_user:
+        render_login_page(shared_state)
+    else:
+        render_sidebar(shared_state)
+        render_main_dashboard(shared_state)
+        st_autorefresh(interval=5000, key="firestore_refresher")
