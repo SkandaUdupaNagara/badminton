@@ -17,7 +17,7 @@ from streamlit_autorefresh import st_autorefresh
 # ────────────────────────────────────────────────────────────────────────────────
 
 # --- Page Config ---
-st.set_page_config(page_title="Badminton Pro", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Acers Badminton Club 2025", layout="wide", initial_sidebar_state="expanded")
 
 # --- Constants ---
 MAX_COURTS = 4
@@ -113,7 +113,7 @@ def initialize_local_state():
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
 
 def render_login_page(shared_state):
-    st.title("🏸 Badminton Pro Scheduler")
+    st.title("🏸 Acers Badminton Club Scheduler")
     st.write("Please log in to continue.")
     with st.form("login_form"):
         player_db = shared_state.get('players_db', {})
@@ -195,7 +195,7 @@ def end_game(court_id: int, t1_score: int, t2_score: int, state: dict):
 # ────────────────────────────────────────────────────────────────────────────────
 def render_sidebar(state):
     with st.sidebar:
-        st.title("🏸 Badminton Pro")
+        st.title("🏸 Acers Badminton Club")
         st.markdown(f"Welcome, **{st.session_state.logged_in_user}**!")
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in_user = None; st.session_state.password_revealed = False; st.rerun()
