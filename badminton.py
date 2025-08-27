@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import datetime
+from datetime import timezone
 import pandas as pd
 import random
 import string
@@ -63,11 +64,10 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else: # First time setup
+    else:
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
-        
         default_state = {
             'attendees': [], 'waiting_players': [], 'active_games': {},
             'session_password': generate_password()
@@ -88,21 +88,16 @@ def initialize_local_state():
 def render_login_page(live_state, players_db):
     st.title("🏸 Acers Badminton Club Scheduler")
     st.write("Please log in to continue.")
-    
     with st.form("login_form"):
         typed_name = st.text_input("Enter your name")
         password = st.text_input("Session Password", type="password")
         submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
-
         if submitted:
             user_name_to_login, found_player = None, None
             if typed_name:
                 for player in players_db.values():
                     if player.get('name', '').lower() == typed_name.strip().lower():
-                        found_player = player
-                        user_name_to_login = player['name']
-                        break
-            
+                        found_player = player; user_name_to_login = player['name']; break
             if not found_player:
                 st.error("Player not found. Please check your spelling and try again.")
             elif password != live_state.get('session_password'):
@@ -111,23 +106,22 @@ def render_login_page(live_state, players_db):
                 st.session_state.logged_in_user = user_name_to_login
                 if found_player['id'] not in live_state.get('attendees', []):
                     player_id = found_player['id']
-                    STATE_DOC_REF.update({
-                        'attendees': firestore.ArrayUnion([player_id]),
-                        'waiting_players': firestore.ArrayUnion([player_id])
-                    })
+                    STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
                     PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
-                    st.toast(f"Welcome, {user_name_to_login}! You're checked in.", icon="✅")
-                    st.rerun()
+                    st.toast(f"Welcome, {user_name_to_login}! You're checked in.", icon="✅"); st.rerun()
                 else:
                     st.rerun()
-
-    with st.expander("Need the Password?"):
+    # --- FIX: Expander state is now controlled by session_state ---
+    with st.expander("Need the Password?", expanded=st.session_state.get("password_revealed", False)):
         requester = st.selectbox("Confirm identity", options=PASSWORD_REQUESTERS, index=None)
         if requester:
             admin_pw = st.text_input("Enter Admin Password", type="password", key="admin_pw")
             if st.button("Verify & Show"):
-                if admin_pw == ADMIN_PASSWORD: st.session_state.password_revealed = True
-                else: st.error("Incorrect Admin Password.")
+                if admin_pw == ADMIN_PASSWORD:
+                    st.session_state.password_revealed = True
+                    st.rerun() # Rerun to open the expander
+                else:
+                    st.error("Incorrect Admin Password.")
             if st.session_state.get("password_revealed"):
                 st.success(f"Password: **{live_state.get('session_password')}**")
 
@@ -141,12 +135,10 @@ def get_fair_player_selection(live_state: dict, players_db: dict) -> Optional[Li
     waiting_pids = live_state.get('waiting_players', [])
     if len(waiting_pids) < 4: return None
     players = get_players_from_ids(waiting_pids, players_db)
-    
     for p in players:
-        if 'last_played' in p and isinstance(p['last_played'], str):
+        if 'last_played' in p and p['last_played'] and isinstance(p['last_played'], str):
              p['last_played'] = datetime.datetime.fromisoformat(p['last_played'])
-
-    return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))[:4]
+    return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))[:4]
 
 def create_balanced_teams(players: List[dict]) -> (List[dict], List[dict]):
     sp = sorted(players, key=lambda p: p.get('skill', 2), reverse=True); return [sp[0], sp[3]], [sp[1], sp[2]]
@@ -168,17 +160,14 @@ def render_sidebar(live_state, players_db):
         if st.session_state.logged_in_user in ADMIN_USERS:
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
-                STATE_DOC_REF.update({
-                    'attendees': [], 'waiting_players': [], 'active_games': {},
-                    'session_password': generate_password()
-                })
+                STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()})
                 st.cache_data.clear(); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
-        sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min))
+        sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
         if not sorted_waiting: st.info("Waiting list is empty.")
         else:
             pills = [f"<div class='player-pill' style='{'border: 2px solid #9067C6;' if i<4 else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(sorted_waiting)]
@@ -191,19 +180,16 @@ def render_main_dashboard(live_state, players_db):
                 with st.container(border=True):
                     st.markdown(f"<h4>Court {cid_str}</h4>", unsafe_allow_html=True)
                     if game:
-                        team1_pids = [p['id'] for p in game.get('team1', [])]
-                        team2_pids = [p['id'] for p in game.get('team2', [])]
-                        team1_players = get_players_from_ids(team1_pids, players_db)
-                        team2_players = get_players_from_ids(team2_pids, players_db)
-                        
+                        team1_pids = [p['id'] for p in game.get('team1', [])]; team2_pids = [p['id'] for p in game.get('team2', [])]
+                        team1_players = get_players_from_ids(team1_pids, players_db); team2_players = get_players_from_ids(team2_pids, players_db)
                         st.markdown(f"**Team 1:** {' & '.join([p['name'] for p in team1_players])}")
                         st.markdown(f"**Team 2:** {' & '.join([p['name'] for p in team2_players])}")
                         
-                        start_time = game.get('start_time')
+                        start_time = game.get('start_time', datetime.datetime.now(timezone.utc))
                         if isinstance(start_time, str): start_time = datetime.datetime.fromisoformat(start_time)
-                        elif not isinstance(start_time, datetime.datetime): start_time = datetime.datetime.now()
                         
-                        elapsed = datetime.datetime.now(start_time.tzinfo) - start_time
+                        # --- FIX: Ensure both datetimes are timezone-aware for subtraction ---
+                        elapsed = datetime.datetime.now(timezone.utc) - start_time
                         st.metric("Time Elapsed", f"{int(elapsed.total_seconds() // 60):02d}:{int(elapsed.total_seconds() % 60):02d}")
                         
                         s_cols = st.columns(2)
@@ -213,10 +199,10 @@ def render_main_dashboard(live_state, players_db):
                             all_player_ids = game_to_log.get('player_ids', [])
                             STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': firestore.ArrayUnion(all_player_ids)})
                             for pid in all_player_ids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                            finish_time = datetime.datetime.now()
-                            duration = finish_time - start_time
                             
-                            # --- FIX: Use 'finish_time' (no space) as the key ---
+                            # --- FIX: Ensure finish_time is timezone-aware ---
+                            finish_time = datetime.datetime.now(timezone.utc)
+                            duration = finish_time - start_time
                             log = {'finish_time': finish_time, 'Duration': f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s", 'Court': cid_str,
                                    'Team 1 Players': " & ".join([p['name'] for p in team1_players]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players]),
                                    'Score': f"{t1s} - {t2s}", 'Winner': "Draw" if t1s == t2s else "Team 1" if t1s > t2s else "Team 2"}
@@ -232,19 +218,30 @@ def render_main_dashboard(live_state, players_db):
                             STATE_DOC_REF.update({'active_games': live_state['active_games']})
                             for pid in pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                             st.rerun()
+                        # --- NEW: Manual Selection Added Back ---
+                        with st.expander("Manual Selection"):
+                            opts = [(p['id'], p['name']) for p in sorted_waiting]
+                            sel = st.multiselect("Select 4 players from waiting list", opts, format_func=lambda t: t[1], key=f"msel_{cid_str}", max_selections=4)
+                            if st.button("Assign Manually", key=f"mbtn_{cid_str}", use_container_width=True, disabled=(len(sel) != 4)):
+                                selected_pids = [t[0] for t in sel]
+                                selected_players = get_players_from_ids(selected_pids, players_db)
+                                team1, team2 = create_balanced_teams(selected_players)
+                                STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(selected_pids)})
+                                live_state['active_games'][cid_str] = {'team1': team1, 'team2': team2, 'player_ids': selected_pids, 'start_time': firestore.SERVER_TIMESTAMP}
+                                STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                                for pid in selected_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
+                                st.rerun()
 
     with tab_guest_checkout:
         st.subheader("Guest Check-in and Player Check-out")
         search = st.text_input("Search for a player...", placeholder="Type name...", key="checkout_search")
         cols = st.columns(3)
         filtered = [p for p in players_db.values() if search.lower() in p.get('name', '').lower()]
-        
         for i, p in enumerate(sorted(filtered, key=lambda x: x.get('name', ''))):
             pid, is_present = p['id'], p['id'] in live_state.get('attendees', [])
             with cols[i % 3]:
                 if st.button(f"{'✅ ' if is_present else ''}{p.get('name')}", key=f"btn_{pid}", use_container_width=True):
                     st.session_state.show_confirm_for = pid if st.session_state.show_confirm_for != pid else None
-
                 if st.session_state.show_confirm_for == pid:
                     with st.container(border=True):
                         st.write(f"**Status:** {'Present' if is_present else 'Not checked in'}")
@@ -255,30 +252,24 @@ def render_main_dashboard(live_state, players_db):
                             if st.button("Confirm Guest Check-in", key=f"cf_{pid}", type="primary", use_container_width=True):
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'skill': skill, 'gender': gender, 'check_in_time': firestore.SERVER_TIMESTAMP})
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([pid]), 'waiting_players': firestore.ArrayUnion([pid])})
-                                st.session_state.show_confirm_for = None
-                                st.cache_data.clear()
+                                st.session_state.show_confirm_for = None; st.cache_data.clear()
                                 st.toast(f"Guest {p.get('name')} checked in!", icon="👍"); st.rerun()
                         if is_present:
                             if st.button("Confirm Check-out", key=f"rem_{pid}", use_container_width=True):
                                 STATE_DOC_REF.update({'attendees': firestore.ArrayRemove([pid]), 'waiting_players': firestore.ArrayRemove([pid])})
                                 PLAYERS_COLLECTION_REF.document(str(pid)).update({'check_in_time': None})
-                                st.session_state.show_confirm_for = None
-                                st.cache_data.clear()
+                                st.session_state.show_confirm_for = None; st.cache_data.clear()
                                 st.toast(f"{p.get('name')} checked out.", icon="👋"); st.rerun()
 
     with tab_log:
         st.subheader("📊 Completed Games Log")
-        # --- FIX: Use 'finish_time' (no space) for querying ---
         log_docs = LOG_COLLECTION_REF.order_by("finish_time", direction=firestore.Query.DESCENDING).stream()
         log_data = [doc.to_dict() for doc in log_docs]
-        
         if not log_data: st.info("No games logged yet.")
         else:
             df = pd.DataFrame(log_data)
-            # --- FIX: Use 'finish_time' for processing and rename for display ---
             df['finish_time'] = pd.to_datetime(df['finish_time']).dt.tz_convert('Europe/London').dt.strftime('%H:%M')
             df.rename(columns={'finish_time': 'Finish Time'}, inplace=True)
-            
             df = df[['Finish Time', 'Duration', 'Court', 'Team 1 Players', 'Team 2 Players', 'Score', 'Winner']]
             st.dataframe(df, use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode('utf-8')
