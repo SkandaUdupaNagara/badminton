@@ -130,25 +130,9 @@ def render_login_page(live_state, players_db):
 def get_players_from_ids(pids: List[int], players_db: dict) -> List[dict]:
     return [players_db.get(str(pid)) for pid in pids if str(pid) in players_db]
 
-def get_fair_player_selection(live_state: dict, players_db: dict) -> Optional[List[dict]]:
-    waiting_pids = live_state.get('waiting_players', [])
-    if len(waiting_pids) < 4: return None
-    players = get_players_from_ids(waiting_pids, players_db)
-    for p in players:
-        if 'last_played' in p and p['last_played'] and isinstance(p['last_played'], str):
-             p['last_played'] = datetime.datetime.fromisoformat(p['last_played'])
-    return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))[:4]
-
-def create_balanced_teams(players: List[dict]) -> (List[dict], List[dict]):
-    sp = sorted(players, key=lambda p: p.get('skill', 2), reverse=True); return [sp[0], sp[3]], [sp[1], sp[2]]
-
-# --- NEW: Helper function to clear a subcollection ---
 def clear_game_log():
-    """Deletes all documents in the game_log subcollection."""
-    if not LOG_COLLECTION_REF:
-        return
-    docs = LOG_COLLECTION_REF.stream()
-    for doc in docs:
+    if not LOG_COLLECTION_REF: return
+    for doc in LOG_COLLECTION_REF.stream():
         doc.reference.delete()
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -169,14 +153,11 @@ def render_sidebar(live_state, players_db):
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
                 STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()})
-                clear_game_log() # Also clear the log on a full reset
+                clear_game_log()
                 st.cache_data.clear(); st.rerun()
-            
-            # --- NEW: Clear Logs Button ---
             if st.button("🔥 Clear Game Log", use_container_width=True, help="Deletes all entries from the game log but keeps the session running."):
                 clear_game_log()
-                st.toast("Game log has been cleared!", icon="🧹")
-                st.rerun()
+                st.toast("Game log has been cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
@@ -185,7 +166,7 @@ def render_main_dashboard(live_state, players_db):
         sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
         if not sorted_waiting: st.info("Waiting list is empty.")
         else:
-            pills = [f"<div class='player-pill' style='{'border: 2px solid #9067C6;' if i<4 else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(sorted_waiting)]
+            pills = [f"<div class='player-pill'>{p['name']}</div>" for p in sorted_waiting]
             st.markdown("".join(pills), unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True); st.subheader("🏸 Active Courts")
         court_cols = st.columns(2)
@@ -219,25 +200,33 @@ def render_main_dashboard(live_state, players_db):
                             LOG_COLLECTION_REF.add(log); st.rerun()
                     else: 
                         st.success("Court is available!")
-                        next_up = get_fair_player_selection(live_state, players_db)
-                        if st.button("Auto Assign", key=f"auto_{cid_str}", use_container_width=True, type="primary", disabled=(not next_up)):
-                            team1, team2 = create_balanced_teams(next_up); pids = [p['id'] for p in next_up]
-                            STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(pids)})
-                            live_state['active_games'][cid_str] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': firestore.SERVER_TIMESTAMP}
-                            STATE_DOC_REF.update({'active_games': live_state['active_games']})
-                            for pid in pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                            st.rerun()
-                        with st.expander("Manual Selection"):
-                            opts = [(p['id'], p['name']) for p in sorted_waiting];
-                            sel = st.multiselect("Select 4 players from waiting list", opts, format_func=lambda t: t[1], key=f"msel_{cid_str}", max_selections=4)
-                            if st.button("Assign Manually", key=f"mbtn_{cid_str}", use_container_width=True, disabled=(len(sel) != 4)):
-                                pids = [t[0] for t in sel]; players = get_players_from_ids(pids, players_db)
-                                team1, team2 = create_balanced_teams(players)
-                                STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(pids)})
-                                live_state['active_games'][cid_str] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': firestore.SERVER_TIMESTAMP}
-                                STATE_DOC_REF.update({'active_games': live_state['active_games']})
-                                for pid in pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                                st.rerun()
+                        st.markdown("**Manual Game Setup**")
+                        
+                        # --- MODIFIED: Fully manual game creation ---
+                        opts = {p['name']: p['id'] for p in sorted_waiting}
+                        selected_names = st.multiselect("1. Select 4 players for this court", options=opts.keys(), key=f"player_sel_{cid_str}", max_selections=4)
+                        
+                        if len(selected_names) == 4:
+                            team1_names = st.multiselect("2. Select 2 players for Team 1", options=selected_names, key=f"t1_sel_{cid_str}", max_selections=2)
+                            
+                            if len(team1_names) == 2:
+                                team2_names = [name for name in selected_names if name not in team1_names]
+                                st.markdown(f"**Team 1:** {team1_names[0]} & {team1_names[1]}")
+                                st.markdown(f"**Team 2:** {team2_names[0]} & {team2_names[1]}")
+                                
+                                if st.button("Start Game", key=f"start_manual_{cid_str}", use_container_width=True):
+                                    pids = [opts[name] for name in selected_names]
+                                    team1_pids = [opts[name] for name in team1_names]
+                                    team2_pids = [opts[name] for name in team2_names]
+                                    
+                                    team1_players = get_players_from_ids(team1_pids, players_db)
+                                    team2_players = get_players_from_ids(team2_pids, players_db)
+                                    
+                                    STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(pids)})
+                                    live_state['active_games'][cid_str] = {'team1': team1_players, 'team2': team2_players, 'player_ids': pids, 'start_time': firestore.SERVER_TIMESTAMP}
+                                    STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                                    for pid in pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
+                                    st.rerun()
 
     with tab_guest_checkout:
         st.subheader("Guest Check-in and Player Check-out")
@@ -275,7 +264,6 @@ def render_main_dashboard(live_state, players_db):
         if not log_data: st.info("No games logged yet.")
         else:
             df = pd.DataFrame(log_data)
-            # --- MODIFIED: Include date in the timestamp format ---
             df['finish_time'] = pd.to_datetime(df['finish_time']).dt.tz_convert('Europe/London').dt.strftime('%a, %d %b %Y, %H:%M')
             df.rename(columns={'finish_time': 'Finish Time'}, inplace=True)
             df = df[['Finish Time', 'Duration', 'Court', 'Team 1 Players', 'Team 2 Players', 'Score', 'Winner']]
