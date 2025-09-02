@@ -63,7 +63,7 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else:
+    else: # First time setup
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
@@ -82,28 +82,43 @@ def render_player_mode(live_state, players_db):
 
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
-        st.write("Log in with your full mobile number to mark your attendance.")
+        st.write("Log in with the **last 4 digits** of your mobile number to mark your attendance.")
+        
         with st.form("player_login_form"):
-            mobile_number = st.text_input("Enter last 4 digits of your phone number (e.g., +447123456789) then enter 6789")
+            last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
+
             if submitted:
-                found_player = next((p for p in players_db.values() if p.get('mobile') == mobile_number.strip()), None)
-                if not found_player:
-                    st.error("Mobile number not found in the roster.")
-                elif session_password != live_state.get('session_password'):
-                    st.error("Incorrect session password.")
+                last_four = last_four_input.strip()
+                
+                if not (len(last_four) == 4 and last_four.isdigit()):
+                    st.error("Please enter exactly 4 digits.")
                 else:
-                    st.session_state.player_logged_in_name = found_player['name']
-                    player_id = found_player['id']
-                    if player_id not in live_state.get('attendees', []):
-                        STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
-                        PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
-                        st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
-                    st.rerun()
-        
+                    # --- MODIFIED: Changed from .endswith() to an exact match == ---
+                    matching_players = [p for p in players_db.values() if p.get('mobile') == last_four]
+                    
+                    if len(matching_players) == 0:
+                        st.error("No player found with these last 4 digits.")
+                    elif len(matching_players) > 1:
+                        st.error("Multiple players share these last 4 digits. Please contact an admin to resolve this.")
+                    elif session_password != live_state.get('session_password'):
+                        st.error("Incorrect session password.")
+                    else:
+                        found_player = matching_players[0]
+                        st.session_state.player_logged_in_name = found_player['name']
+                        player_id = found_player['id']
+                        if player_id not in live_state.get('attendees', []):
+                            STATE_DOC_REF.update({
+                                'attendees': firestore.ArrayUnion([player_id]),
+                                'waiting_players': firestore.ArrayUnion([player_id])
+                            })
+                            PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
+                            st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
+                        st.rerun()
+
         with st.expander("Need the Session Password?"):
-             st.info("Please ask Admin for today's password.")
+             st.info("Please ask an authorised member (Jag, Chilli, Raj, Roopa, Santhosh, or Skanda) for today's password.")
     else:
         st.title(f"✅ Attendance Marked, {st.session_state.player_logged_in_name}!")
         st.success(f"You are checked in for the session on {datetime.datetime.now(timezone.utc).astimezone(tz=datetime.timezone(datetime.timedelta(hours=1))).strftime('%A, %d %B %Y')}.")
@@ -136,31 +151,33 @@ def render_court_mode(live_state, players_db):
     if not st.session_state.court_operator_logged_in:
         st.title("🔑 Court Controller Login")
         st.write("Any player who has checked in can log in here to manage the courts.")
-        
         with st.form("court_login_form"):
             present_player_ids = live_state.get('attendees', [])
             present_players = get_players_from_ids(present_player_ids, players_db)
             present_player_names = sorted([p['name'] for p in present_players])
-            
-            # --- FIX: Conditionally disable the form instead of stopping execution ---
             no_players_present = not present_player_names
-            
             if no_players_present:
-                st.warning("No players have checked in yet. The Court Mode cannot be accessed until at least one player marks their attendance.")
-
+                st.warning("No players have checked in yet. An admin must get the password below and distribute it.")
             selected_user = st.selectbox("Select your name (must be present)", present_player_names, disabled=no_players_present)
             password = st.text_input("Today's Session Password", type="password", disabled=no_players_present)
             submitted = st.form_submit_button("Login", disabled=no_players_present)
-            
             if submitted and not no_players_present:
                 if password == live_state.get('session_password'):
                     st.session_state.court_operator_logged_in = selected_user
                     st.rerun()
                 else:
                     st.error("Incorrect session password.")
+        st.markdown("---")
+        with st.expander("Admin: Get Session Password"):
+            st.info("This is for admins to view and distribute the password at the start of the session.")
+            admin_pw = st.text_input("Enter Admin Password", type="password", key="court_admin_pw_check")
+            if st.button("Show Session Password"):
+                if admin_pw == ADMIN_PASSWORD:
+                    st.success(f"Today's Session Password is: **{live_state.get('session_password')}**")
+                else:
+                    st.error("Incorrect Admin Password.")
         return
 
-    # If logged in, render the main app
     render_sidebar(live_state, players_db)
     render_main_dashboard(live_state, players_db)
     st_autorefresh(interval=5000, key="court_refresher")
@@ -196,7 +213,6 @@ def render_sidebar(live_state, players_db):
         on_court = sum(len(g.get('player_ids', [])) for g in live_state.get('active_games', {}).values())
         c1, c2, c3 = st.columns(3); c1.metric("Present", attendees); c2.metric("Waiting", waiting); c3.metric("On Court", on_court)
         st.markdown("---")
-        
         if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
@@ -207,7 +223,6 @@ def render_sidebar(live_state, players_db):
 
 def render_main_dashboard(live_state, players_db):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
-    
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
         sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
@@ -308,6 +323,12 @@ if not db:
 else:
     live_state = get_live_state()
     players_db = get_players_db()
+    
+    # Initialize local state which is browser-specific
+    if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
+    if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
+    if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
+    if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
     
     mode = st.query_params.get("mode")
     if mode == "court":
