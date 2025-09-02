@@ -70,7 +70,7 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else: # First time setup
+    else:
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
@@ -108,12 +108,10 @@ def render_player_mode(live_state, players_db):
                         st.session_state.player_logged_in_name = found_player['name']
                         player_id = found_player['id']
                         if player_id not in live_state.get('attendees', []):
-                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]),'waiting_players': firestore.ArrayUnion([player_id])})
+                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
                             PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
                             st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
                         st.rerun()
-        with st.expander("Need the Session Password?"):
-             st.info("Ask an authorised member for today's password.")
     else:
         st.title(f"✅ Attendance Marked, {st.session_state.player_logged_in_name}!")
         st.subheader("Current Waiting Queue")
@@ -121,7 +119,7 @@ def render_player_mode(live_state, players_db):
         waiting_players = get_players_from_ids(waiting_pids, players_db)
         if not waiting_players: st.info("The waiting list is empty.")
         else:
-            pills = [f"<div class='player-pill' style='{'background-color: #d0eaff; border: 2px solid #006aff;' if p['name'] == st.session_state.player_logged_in_name else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(waiting_players)]
+            pills = [f"<div class='player-pill' style='{'background-color: #d0eaff; border: 2px solid #006aff;' if p and p['name'] == st.session_state.player_logged_in_name else ''}'>{i+1}. {p['name'] if p else '...'}</div>" for i, p in enumerate(waiting_players)]
             st.markdown("".join(pills), unsafe_allow_html=True)
         if st.button("Logout"): st.session_state.player_logged_in_name = None; st.rerun()
         st_autorefresh(interval=10000, key="player_refresher")
@@ -132,7 +130,7 @@ def render_court_mode(live_state, players_db):
         st.title("🔑 Court Controller Login")
         with st.form("court_login_form"):
             present_pids = live_state.get('attendees', []); present_players = get_players_from_ids(present_pids, players_db)
-            present_names = sorted([p['name'] for p in present_players]); no_players = not present_names
+            present_names = sorted([p['name'] for p in present_players if p]); no_players = not present_names
             if no_players: st.warning("No players have checked in yet.")
             selected_user = st.selectbox("Select your name (must be present)", present_names, disabled=no_players)
             password = st.text_input("Today's Session Password", type="password", disabled=no_players)
@@ -191,7 +189,6 @@ def render_sidebar(live_state, players_db):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
-    logged_in_player = next((p for p in players_db.values() if p['name'] == st.session_state.court_operator_logged_in), None)
     courts_col, queue_col = st.columns([3, 1])
 
     with courts_col:
@@ -205,8 +202,8 @@ def render_main_dashboard(live_state, players_db):
                     if game:
                         team1_pids = [p['id'] for p in game.get('team1', [])]; team2_pids = [p['id'] for p in game.get('team2', [])]
                         team1_players = get_players_from_ids(team1_pids, players_db); team2_players = get_players_from_ids(team2_pids, players_db)
-                        st.markdown(f"**Team 1:** {' & '.join([p['name'] for p in team1_players])}")
-                        st.markdown(f"**Team 2:** {' & '.join([p['name'] for p in team2_players])}")
+                        st.markdown(f"**Team 1:** {' & '.join([p['name'] for p in team1_players if p])}")
+                        st.markdown(f"**Team 2:** {' & '.join([p['name'] for p in team2_players if p])}")
                         start_time = game.get('start_time');
                         if isinstance(start_time, str): start_time = datetime.datetime.fromisoformat(start_time)
                         elif not isinstance(start_time, datetime.datetime): start_time = datetime.datetime.now(timezone.utc)
@@ -223,8 +220,7 @@ def render_main_dashboard(live_state, players_db):
                             if winning_pids:
                                 other_winner_id = None
                                 if len(winning_pids) > 1 and winning_pids[0] == last_chooser_id:
-                                    next_chooser_pid = winning_pids[1]
-                                    other_winner_id = winning_pids[0]
+                                    next_chooser_pid, other_winner_id = winning_pids[1], winning_pids[0]
                                 else:
                                     next_chooser_pid = winning_pids[0]
                                     if len(winning_pids) > 1: other_winner_id = winning_pids[1]
@@ -235,38 +231,35 @@ def render_main_dashboard(live_state, players_db):
                             STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': new_waiting_list, 'last_chooser_id': next_chooser_pid})
                             for pid in ordered_winners + losing_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                             log = {'finish_time': firestore.SERVER_TIMESTAMP, 'Duration': f"{int(elapsed.total_seconds() // 60)}m", 'Court': cid_str,
-                                   'Team 1 Players': " & ".join([p['name'] for p in team1_players]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players]),
+                                   'Team 1 Players': " & ".join([p['name'] for p in team1_players if p]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players if p]),
                                    'Score': f"{t1s} - {t2s}", 'Winner': "Draw" if t1s == t2s else "Team 1" if t1s > t2s else "Team 2"}
                             LOG_COLLECTION_REF.add(log); st.rerun()
                     else: # Court is free
                         waiting_pids = live_state.get('waiting_players', [])
-                        if not waiting_pids:
-                            st.info("Court is available. No players are waiting.")
+                        if len(waiting_pids) < 4:
+                            st.info("Court is available. Need at least 4 players waiting to start a game.")
                         else:
                             chooser_pid = waiting_pids[0]
                             chooser_player = players_db.get(str(chooser_pid))
-                            if logged_in_player and chooser_player and logged_in_player['id'] == chooser_player['id']:
-                                st.success(f"Your turn, {chooser_player['name']}! Form the teams.");
-                                other_players = get_players_from_ids(waiting_pids[1:], players_db)
-                                opts = {p['name']: p['id'] for p in other_players}
-                                selected_names = st.multiselect("1. Select 3 other players", options=opts.keys(), key=f"pl_sel_{cid_str}", max_selections=3)
-                                if len(selected_names) == 3:
-                                    team1_choices = [chooser_player['name']] + selected_names
-                                    team1_names = st.multiselect("2. Select 2 players for your team (Team 1)", options=team1_choices, key=f"t1_sel_{cid_str}", max_selections=2)
-                                    if len(team1_names) == 2:
-                                        team2_names = [name for name in team1_choices if name not in team1_names]
-                                        st.markdown(f"**Team 1:** {team1_names[0]} & {team1_names[1]}"); st.markdown(f"**Team 2:** {team2_names[0]} & {team2_names[1]}")
-                                        if st.button("Start Game", key=f"start_manual_{cid_str}", use_container_width=True):
-                                            all_pids = [chooser_player['id']] + [opts[name] for name in selected_names]
-                                            team1_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team1_names]
-                                            team2_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team2_names]
-                                            STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(all_pids)})
-                                            live_state['active_games'][cid_str] = {'team1': get_players_from_ids(team1_pids, players_db), 'team2': get_players_from_ids(team2_pids, players_db), 'player_ids': all_pids, 'start_time': firestore.SERVER_TIMESTAMP}
-                                            STATE_DOC_REF.update({'active_games': live_state['active_games']})
-                                            for pid in all_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                                            st.rerun()
-                            else:
-                                st.info(f"Waiting for **{chooser_player.get('name', 'Chooser')}** to pick players.")
+                            st.success(f"👑 It's **{chooser_player.get('name', 'N/A')}'s** turn to choose.")
+                            other_players = get_players_from_ids(waiting_pids[1:], players_db)
+                            opts = {p['name']: p['id'] for p in other_players if p}
+                            selected_names = st.multiselect(f"1. Select 3 players to join {chooser_player.get('name', 'N/A')}", options=opts.keys(), key=f"pl_sel_{cid_str}", max_selections=3)
+                            if len(selected_names) == 3:
+                                team1_choices = [chooser_player['name']] + selected_names
+                                team1_names = st.multiselect("2. Select 2 players for Team 1", options=team1_choices, key=f"t1_sel_{cid_str}", max_selections=2)
+                                if len(team1_names) == 2:
+                                    team2_names = [name for name in team1_choices if name not in team1_names]
+                                    st.markdown(f"**Team 1:** {team1_names[0]} & {team1_names[1]}"); st.markdown(f"**Team 2:** {team2_names[0]} & {team2_names[1]}")
+                                    if st.button("Start Game", key=f"start_manual_{cid_str}", use_container_width=True):
+                                        all_pids = [chooser_player['id']] + [opts[name] for name in selected_names]
+                                        team1_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team1_names]
+                                        team2_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team2_names]
+                                        STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(all_pids)})
+                                        live_state['active_games'][cid_str] = {'team1': get_players_from_ids(team1_pids, players_db), 'team2': get_players_from_ids(team2_pids, players_db), 'player_ids': all_pids, 'start_time': firestore.SERVER_TIMESTAMP}
+                                        STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                                        for pid in all_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
+                                        st.rerun()
 
     with queue_col:
         st.subheader("⏳ Waiting Queue")
@@ -275,10 +268,10 @@ def render_main_dashboard(live_state, players_db):
         if not waiting_players: st.info("Waiting list is empty.")
         else:
             for i, p in enumerate(waiting_players):
-                is_chooser = (i == 0)
-                icon = "👑 " if is_chooser else ""
-                st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
-    # The other tabs can be added back if needed
+                if p:
+                    is_chooser = (i == 0)
+                    icon = "👑 " if is_chooser else ""
+                    st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
     
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
@@ -290,8 +283,10 @@ else:
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
+    
     live_state = get_live_state()
     players_db = get_players_db()
+    
     mode = st.query_params.get("mode")
     if mode == "court":
         render_court_mode(live_state, players_db)
