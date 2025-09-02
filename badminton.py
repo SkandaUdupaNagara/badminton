@@ -103,7 +103,7 @@ def render_player_mode(live_state, players_db):
                     st.rerun()
         
         with st.expander("Need the Session Password?"):
-             st.info("Please ask an authorised member (Jag, Chilli, Raj, Roopa, Santhosh, or Skanda) for today's password.")
+             st.info("Please ask Admin for today's password.")
     else:
         st.title(f"✅ Attendance Marked, {st.session_state.player_logged_in_name}!")
         st.success(f"You are checked in for the session on {datetime.datetime.now(timezone.utc).astimezone(tz=datetime.timezone(datetime.timedelta(hours=1))).strftime('%A, %d %B %Y')}.")
