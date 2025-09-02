@@ -82,45 +82,26 @@ def render_player_mode(live_state, players_db):
 
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
-        st.write("Log in with the **last 4 digits** of your mobile number to mark your attendance.")
-        
+        st.write("Log in with your mobile number to mark your attendance for today's session.")
         with st.form("player_login_form"):
-            # --- MODIFIED: Input changed to last 4 digits ---
-            last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
+            mobile_number = st.text_input("Enter your full mobile number (e.g., +447123456789)")
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
-
             if submitted:
-                last_four = last_four_input.strip()
-                
-                if not (len(last_four) == 4 and last_four.isdigit()):
-                    st.error("Please enter exactly 4 digits.")
+                found_player = next((p for p in players_db.values() if p.get('mobile') == mobile_number.strip()), None)
+                if not found_player:
+                    st.error("Mobile number not found in the roster.")
+                elif session_password != live_state.get('session_password'):
+                    st.error("Incorrect session password.")
                 else:
-                    # Find all players whose mobile number ends with these digits
-                    matching_players = [p for p in players_db.values() if p.get('mobile', '').endswith(last_four)]
-                    
-                    if len(matching_players) == 0:
-                        st.error("No player found with these last 4 digits.")
-                    elif len(matching_players) > 1:
-                        st.error("Multiple players share these last 4 digits. Please contact an admin to resolve this.")
-                    elif session_password != live_state.get('session_password'):
-                        st.error("Incorrect session password.")
-                    else:
-                        # Success case: exactly one player found and password is correct
-                        found_player = matching_players[0]
-                        st.session_state.player_logged_in_name = found_player['name']
-                        player_id = found_player['id']
-                        
-                        if player_id not in live_state.get('attendees', []):
-                            STATE_DOC_REF.update({
-                                'attendees': firestore.ArrayUnion([player_id]),
-                                'waiting_players': firestore.ArrayUnion([player_id])
-                            })
-                            PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
-                            st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
-                        
-                        st.rerun()
-
+                    st.session_state.player_logged_in_name = found_player['name']
+                    player_id = found_player['id']
+                    if player_id not in live_state.get('attendees', []):
+                        STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
+                        PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
+                        st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
+                    st.rerun()
+        
         with st.expander("Need the Session Password?"):
              st.info("Please ask an authorised member (Jag, Chilli, Raj, Roopa, Santhosh, or Skanda) for today's password.")
     else:
@@ -319,9 +300,11 @@ def render_main_dashboard(live_state, players_db):
 if not db:
     st.error("Could not connect to Firebase.")
 else:
-    initialize_local_state()
     live_state = get_live_state()
     players_db = get_players_db()
+    
+    # --- FIX: The call to initialize_local_state was missing ---
+    initialize_local_state()
     
     mode = st.query_params.get("mode")
     if mode == "court":
