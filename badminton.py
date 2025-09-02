@@ -69,7 +69,7 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else:
+    else: # First time setup
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
@@ -83,7 +83,7 @@ def get_live_state():
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
 # ────────────────────────────────────────────────────────────────────────────────
-# LOGIN & ATTENDANCE MODES
+# PLAYER & COURT MODES (Login and Attendance)
 # ────────────────────────────────────────────────────────────────────────────────
 def render_player_mode(live_state, players_db):
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
@@ -212,10 +212,14 @@ def render_main_dashboard(live_state, players_db):
                         t1s, t2s = s_cols[0].number_input("T1 Score", 0, step=1, key=f"t1s_{cid_str}"), s_cols[1].number_input("T2 Score", 0, step=1, key=f"t2s_{cid_str}")
                         if st.button("Log Score & Finish", key=f"log_{cid_str}", use_container_width=True, type="primary"):
                             game_to_log = live_state['active_games'].pop(cid_str)
+                            
+                            # --- MODIFIED: New "Finishers First, Winners on Top" Logic ---
                             winning_pids = team1_pids if t1s > t2s else team2_pids if t2s > t1s else []
                             losing_pids = team2_pids if t1s > t2s else team1_pids if t2s > t1s else team1_pids + team2_pids
+                            
                             last_chooser_id = live_state.get('last_chooser_id')
                             next_chooser_pid = None
+                            
                             if winning_pids:
                                 other_winner_id = None
                                 if len(winning_pids) > 1 and winning_pids[0] == last_chooser_id:
@@ -224,9 +228,12 @@ def render_main_dashboard(live_state, players_db):
                                     next_chooser_pid = winning_pids[0]
                                     if len(winning_pids) > 1: other_winner_id = winning_pids[1]
                                 ordered_winners = [next_chooser_pid, other_winner_id] if other_winner_id else [next_chooser_pid]
-                            else: ordered_winners = []
+                            else: # This happens in a draw
+                                ordered_winners = []
+
                             current_waiting = [pid for pid in live_state.get('waiting_players', []) if pid not in ordered_winners + losing_pids]
-                            new_waiting_list = ordered_winners + current_waiting + losing_pids
+                            new_waiting_list = ordered_winners + losing_pids + current_waiting
+
                             STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': new_waiting_list, 'last_chooser_id': next_chooser_pid})
                             for pid in ordered_winners + losing_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                             log = {'finish_time': firestore.SERVER_TIMESTAMP, 'Duration': f"{int(elapsed.total_seconds() // 60)}m", 'Court': cid_str,
@@ -262,6 +269,7 @@ def render_main_dashboard(live_state, players_db):
 
     with queue_col:
         st.subheader("⏳ Waiting Queue")
+        st.caption("Finishers move to the top, winners first.")
         waiting_pids = live_state.get('waiting_players', [])
         waiting_players = get_players_from_ids(waiting_pids, players_db)
         if not waiting_players: st.info("Waiting list is empty.")
@@ -271,14 +279,13 @@ def render_main_dashboard(live_state, players_db):
                     is_chooser = (i == 0)
                     icon = "👑 " if is_chooser else ""
                     st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
-    
+
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
 if not db:
     st.error("Could not connect to Firebase.")
 else:
-    # Initialize browser-local state (for login status)
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
