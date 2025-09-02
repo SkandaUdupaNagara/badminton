@@ -106,13 +106,16 @@ def render_player_mode(live_state, players_db):
                         st.session_state.player_logged_in_name = found_player['name']
                         player_id = found_player['id']
                         if player_id not in live_state.get('attendees', []):
-                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
+                            STATE_DOC_REF.update({
+                                'attendees': firestore.ArrayUnion([player_id]),
+                                'waiting_players': firestore.ArrayUnion([player_id])
+                            })
                             PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
                             st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
                         st.rerun()
 
         with st.expander("Need the Session Password?"):
-             st.info("Please ask an authorised member (Jag, Chilli, Raj, Roopa, Santhosh, or Skanda) for today's password.")
+             st.info("Please ask an authorised member for today's password. They can retrieve it from the Court Mode URL.")
     else:
         st.title(f"✅ Attendance Marked, {st.session_state.player_logged_in_name}!")
         st.success(f"You are checked in for the session on {datetime.datetime.now(timezone.utc).astimezone(tz=datetime.timezone(datetime.timedelta(hours=1))).strftime('%A, %d %B %Y')}.")
@@ -147,7 +150,7 @@ def render_court_mode(live_state, players_db):
             present_player_names = sorted([p['name'] for p in present_players])
             no_players_present = not present_player_names
             if no_players_present:
-                st.warning("No players have checked in yet. An admin must get the password below and distribute it.")
+                st.warning("No players have checked in yet. Admins must sync the roster and get the password below.")
             selected_user = st.selectbox("Select your name (must be present)", present_player_names, disabled=no_players_present)
             password = st.text_input("Today's Session Password", type="password", disabled=no_players_present)
             submitted = st.form_submit_button("Login", disabled=no_players_present)
@@ -158,16 +161,34 @@ def render_court_mode(live_state, players_db):
                 else:
                     st.error("Incorrect session password.")
         st.markdown("---")
-        with st.expander("Admin: Get Session Password"):
-            st.info("This is for admins to view and distribute the password at the start of the session.")
+        
+        # --- FIX: Admin tools are now on the login page to break the deadlock ---
+        with st.expander("Admin Tools"):
+            st.info("Admins can sync the roster and get the session password here.")
             admin_pw = st.text_input("Enter Admin Password", type="password", key="court_admin_pw_check")
-            if st.button("Show Session Password"):
+            
+            c1, c2 = st.columns(2)
+            if c1.button("Show Session Password"):
                 if admin_pw == ADMIN_PASSWORD:
                     st.success(f"Today's Session Password is: **{live_state.get('session_password')}**")
                 else:
                     st.error("Incorrect Admin Password.")
+            
+            if c2.button("⚙️ Sync Player Roster"):
+                if admin_pw == ADMIN_PASSWORD:
+                    with st.spinner("Syncing roster with secrets..."):
+                        roster_from_secrets = json.loads(INITIAL_ROSTER_JSON)
+                        for player in roster_from_secrets:
+                            PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
+                        st.cache_data.clear()
+                    st.success("Player Roster Synced! The page will now reload.")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error("Incorrect Admin Password.")
         return
 
+    # If logged in, render the main app
     render_sidebar(live_state, players_db)
     render_main_dashboard(live_state, players_db)
     st_autorefresh(interval=5000, key="court_refresher")
@@ -206,17 +227,6 @@ def render_sidebar(live_state, players_db):
         
         if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
-            # --- NEW: Roster Sync Button ---
-            if st.button("⚙️ Sync Player Roster", use_container_width=True, help="Updates the player database from the initial roster in your secrets file."):
-                with st.spinner("Syncing roster with secrets..."):
-                    roster_from_secrets = json.loads(INITIAL_ROSTER_JSON)
-                    for player in roster_from_secrets:
-                        PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
-                    st.cache_data.clear()
-                st.success("Player Roster Synced!")
-                time.sleep(1)
-                st.rerun()
-
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
                 STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()})
                 clear_game_log(); st.cache_data.clear(); st.rerun()
@@ -224,10 +234,8 @@ def render_sidebar(live_state, players_db):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
-    # This function is long, but its internal logic is correct from the previous version.
-    # The full implementation is included here as requested.
+    # This function's logic is pasted from the previous working version
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
-    
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
         sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
@@ -319,13 +327,13 @@ def render_main_dashboard(live_state, players_db):
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Log (CSV)", csv, f"badminton_log_{datetime.date.today().strftime('%Y-%m-%d')}.csv", "text/csv")
 
-
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION (URL ROUTER)
 # ────────────────────────────────────────────────────────────────────────────────
 if not db:
     st.error("Could not connect to Firebase.")
 else:
+    # Initialize local state which is browser-specific
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
