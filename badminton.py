@@ -303,9 +303,7 @@ else:
     live_state = get_live_state()
     players_db = get_players_db()
     
-    # --- FIX: The call to initialize_local_state was missing ---
-    initialize_local_state()
-    
+   
     mode = st.query_params.get("mode")
     if mode == "court":
         render_court_mode(live_state, players_db)
