@@ -85,6 +85,7 @@ def render_player_mode(live_state, players_db):
         st.write("Log in with the **last 4 digits** of your mobile number to mark your attendance.")
         
         with st.form("player_login_form"):
+            # --- CORRECTED: Ask for last 4 digits ---
             last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
@@ -95,7 +96,7 @@ def render_player_mode(live_state, players_db):
                 if not (len(last_four) == 4 and last_four.isdigit()):
                     st.error("Please enter exactly 4 digits.")
                 else:
-                    # --- MODIFIED: Changed from .endswith() to an exact match == ---
+                    # --- CORRECTED: Logic now performs an exact match on the 4 digits ---
                     matching_players = [p for p in players_db.values() if p.get('mobile') == last_four]
                     
                     if len(matching_players) == 0:
@@ -105,6 +106,7 @@ def render_player_mode(live_state, players_db):
                     elif session_password != live_state.get('session_password'):
                         st.error("Incorrect session password.")
                     else:
+                        # Success case
                         found_player = matching_players[0]
                         st.session_state.player_logged_in_name = found_player['name']
                         player_id = found_player['id']
@@ -213,6 +215,7 @@ def render_sidebar(live_state, players_db):
         on_court = sum(len(g.get('player_ids', [])) for g in live_state.get('active_games', {}).values())
         c1, c2, c3 = st.columns(3); c1.metric("Present", attendees); c2.metric("Waiting", waiting); c3.metric("On Court", on_court)
         st.markdown("---")
+        
         if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
@@ -223,6 +226,7 @@ def render_sidebar(live_state, players_db):
 
 def render_main_dashboard(live_state, players_db):
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
+    
     with tab_dashboard:
         st.subheader("⏳ Waiting Queue")
         sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
