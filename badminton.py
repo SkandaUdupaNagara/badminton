@@ -17,7 +17,6 @@ from streamlit_autorefresh import st_autorefresh
 # CONFIGURATION & INITIAL DATA
 # ────────────────────────────────────────────────────────────────────────────────
 
-# --- Page Config ---
 st.set_page_config(page_title="Acers Badminton Club 2025", layout="wide", initial_sidebar_state="expanded")
 
 # --- Constants & Secrets ---
@@ -64,134 +63,172 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else:
+    else: # First time setup
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
-        default_state = {
-            'attendees': [], 'waiting_players': [], 'active_games': {},
-            'session_password': generate_password(), 'chooser': None # NEW: For winner's choice
-        }
+        default_state = {'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()}
         STATE_DOC_REF.set(default_state)
         return default_state
 
-# ────────────────────────────────────────────────────────────────────────────────
-# SESSION STATE & AUTH
-# ────────────────────────────────────────────────────────────────────────────────
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
-def initialize_local_state():
-    if 'logged_in_user' not in st.session_state: st.session_state.logged_in_user = None
-    if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
-    if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
+# ────────────────────────────────────────────────────────────────────────────────
+# MODE 1: PLAYER ATTENDANCE (DEFAULT URL)
+# ────────────────────────────────────────────────────────────────────────────────
+def render_player_mode(live_state, players_db):
+    if 'player_logged_in_name' not in st.session_state:
+        st.session_state.player_logged_in_name = None
 
-def render_login_page(live_state, players_db):
-    st.title("🏸 Acers Badminton Club Scheduler")
-    st.write("Please log in to continue.")
-    with st.form("login_form"):
-        typed_name = st.text_input("Enter your name")
-        password = st.text_input("Session Password", type="password")
-        submitted = st.form_submit_button("Login", use_container_width=True, type="primary")
+    if not st.session_state.player_logged_in_name:
+        st.title("🏸 Player Attendance")
+        st.write("Log in with the **last 4 digits** of your mobile number to mark your attendance.")
+        
+        with st.form("player_login_form"):
+            # --- MODIFIED: Input changed to last 4 digits ---
+            last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
+            session_password = st.text_input("Today's Session Password", type="password")
+            submitted = st.form_submit_button("Mark Attendance")
 
-        if submitted:
-            user_name_to_login, found_player = None, None
-            if typed_name:
-                for player in players_db.values():
-                    if player.get('name', '').lower() == typed_name.strip().lower():
-                        found_player = player; user_name_to_login = player['name']; break
-            if not found_player:
-                st.error("Player not found. Please check your spelling and try again.")
-            elif password != live_state.get('session_password'):
-                st.error("Incorrect session password.")
-            else:
-                st.session_state.logged_in_user = user_name_to_login
+            if submitted:
+                last_four = last_four_input.strip()
                 
-                # Check if this is the first player to log in
-                is_first_login = not live_state.get('attendees')
-                
-                if found_player['id'] not in live_state.get('attendees', []):
-                    player_id = found_player['id']
-                    update_data = {
-                        'attendees': firestore.ArrayUnion([player_id]),
-                        'waiting_players': firestore.ArrayUnion([player_id])
-                    }
-                    # If first login, set as the chooser for Court 1
-                    if is_first_login:
-                        update_data['chooser'] = {'player_id': player_id, 'court_id': '1'}
-                        st.toast(f"Welcome, {user_name_to_login}! You're the first, you choose the first game on Court 1.", icon="🎉")
+                if not (len(last_four) == 4 and last_four.isdigit()):
+                    st.error("Please enter exactly 4 digits.")
+                else:
+                    # Find all players whose mobile number ends with these digits
+                    matching_players = [p for p in players_db.values() if p.get('mobile', '').endswith(last_four)]
+                    
+                    if len(matching_players) == 0:
+                        st.error("No player found with these last 4 digits.")
+                    elif len(matching_players) > 1:
+                        st.error("Multiple players share these last 4 digits. Please contact an admin to resolve this.")
+                    elif session_password != live_state.get('session_password'):
+                        st.error("Incorrect session password.")
                     else:
-                         st.toast(f"Welcome, {user_name_to_login}! You're checked in.", icon="✅")
+                        # Success case: exactly one player found and password is correct
+                        found_player = matching_players[0]
+                        st.session_state.player_logged_in_name = found_player['name']
+                        player_id = found_player['id']
+                        
+                        if player_id not in live_state.get('attendees', []):
+                            STATE_DOC_REF.update({
+                                'attendees': firestore.ArrayUnion([player_id]),
+                                'waiting_players': firestore.ArrayUnion([player_id])
+                            })
+                            PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
+                            st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
+                        
+                        st.rerun()
 
-                    STATE_DOC_REF.update(update_data)
-                    PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
-                    st.rerun()
-                else:
-                    st.rerun()
-
-    with st.expander("Need the Password?", expanded=st.session_state.get("password_revealed", False)):
-        requester = st.selectbox("Confirm identity", options=PASSWORD_REQUESTERS, index=None)
-        if requester:
-            admin_pw = st.text_input("Enter Admin Password", type="password", key="admin_pw")
-            if st.button("Verify & Show"):
-                if admin_pw == ADMIN_PASSWORD:
-                    st.session_state.password_revealed = True
-                    st.rerun()
-                else:
-                    st.error("Incorrect Admin Password.")
-            if st.session_state.get("password_revealed"):
-                st.success(f"Password: **{live_state.get('session_password')}**")
+        with st.expander("Need the Session Password?"):
+             st.info("Please ask an authorised member (Jag, Chilli, Raj, Roopa, Santhosh, or Skanda) for today's password.")
+    else:
+        st.title(f"✅ Attendance Marked, {st.session_state.player_logged_in_name}!")
+        st.success(f"You are checked in for the session on {datetime.datetime.now(timezone.utc).astimezone(tz=datetime.timezone(datetime.timedelta(hours=1))).strftime('%A, %d %B %Y')}.")
+        st.subheader("Current Waiting Queue")
+        
+        waiting_pids = live_state.get('waiting_players', [])
+        waiting_players = get_players_from_ids(waiting_pids, players_db)
+        if not waiting_players:
+            st.info("The waiting list is currently empty.")
+        else:
+            pills = []
+            for i, p in enumerate(waiting_players):
+                is_you_class = "background-color: #d0eaff; border: 2px solid #006aff;" if p['name'] == st.session_state.player_logged_in_name else ""
+                pills.append(f"<div class='player-pill' style='{is_you_class}'>{i+1}. {p['name']}</div>")
+            st.markdown("".join(pills), unsafe_allow_html=True)
+            
+        if st.button("Logout"):
+            st.session_state.player_logged_in_name = None
+            st.rerun()
+        
+        st_autorefresh(interval=10000, key="player_refresher")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# HELPER FUNCTIONS
+# MODE 2: COURT CONTROLLER (URL with ?mode=court)
 # ────────────────────────────────────────────────────────────────────────────────
+def render_court_mode(live_state, players_db):
+    if 'court_operator_logged_in' not in st.session_state:
+        st.session_state.court_operator_logged_in = None
+    
+    if not st.session_state.court_operator_logged_in:
+        st.title("🔑 Court Controller Login")
+        st.write("Any player who has checked in can log in here to manage the courts.")
+        with st.form("court_login_form"):
+            present_player_ids = live_state.get('attendees', [])
+            present_players = get_players_from_ids(present_player_ids, players_db)
+            present_player_names = sorted([p['name'] for p in present_players])
+            
+            if not present_player_names:
+                st.warning("No players have checked in yet."); st.stop()
+
+            selected_user = st.selectbox("Select your name (must be present)", present_player_names)
+            password = st.text_input("Today's Session Password", type="password")
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                if password == live_state.get('session_password'):
+                    st.session_state.court_operator_logged_in = selected_user
+                    st.rerun()
+                else:
+                    st.error("Incorrect session password.")
+        return
+
+    render_sidebar(live_state, players_db)
+    render_main_dashboard(live_state, players_db)
+    st_autorefresh(interval=5000, key="court_refresher")
+
+# --- Helper functions and UI components for Court Mode ---
 def get_players_from_ids(pids: List[int], players_db: dict) -> List[dict]:
     return [players_db.get(str(pid)) for pid in pids if str(pid) in players_db]
 
-def clear_game_log():
-    if not LOG_COLLECTION_REF: return
-    for doc in LOG_COLLECTION_REF.stream():
-        doc.reference.delete()
+def get_fair_player_selection(live_state: dict, players_db: dict) -> Optional[List[dict]]:
+    waiting_pids = live_state.get('waiting_players', []);
+    if len(waiting_pids) < 4: return None
+    players = get_players_from_ids(waiting_pids, players_db)
+    for p in players:
+        if p and 'last_played' in p and p['last_played'] and isinstance(p['last_played'], str):
+             p['last_played'] = datetime.datetime.fromisoformat(p['last_played'])
+    return sorted(players, key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))[:4]
 
-# ────────────────────────────────────────────────────────────────────────────────
-# UI RENDERING FUNCTIONS
-# ────────────────────────────────────────────────────────────────────────────────
+def create_balanced_teams(players: List[dict]) -> (List[dict], List[dict]):
+    sp = sorted(players, key=lambda p: p.get('skill', 2), reverse=True); return [sp[0], sp[3]], [sp[1], sp[2]]
+
+def clear_game_log():
+    if LOG_COLLECTION_REF:
+        for doc in LOG_COLLECTION_REF.stream(): doc.reference.delete()
+
 def render_sidebar(live_state, players_db):
     with st.sidebar:
         st.title("🏸 Acers Badminton Club")
-        st.markdown(f"Welcome, **{st.session_state.logged_in_user}**!")
-        if st.button("Logout", use_container_width=True):
-            st.session_state.logged_in_user = None; st.rerun()
+        st.markdown(f"Operator: **{st.session_state.court_operator_logged_in}**")
+        if st.button("Logout Operator", use_container_width=True):
+            st.session_state.court_operator_logged_in = None; st.rerun()
         st.markdown("---")
         attendees, waiting = len(live_state.get('attendees', [])), len(live_state.get('waiting_players', []))
         on_court = sum(len(g.get('player_ids', [])) for g in live_state.get('active_games', {}).values())
         c1, c2, c3 = st.columns(3); c1.metric("Present", attendees); c2.metric("Waiting", waiting); c3.metric("On Court", on_court)
         st.markdown("---")
-        if st.session_state.logged_in_user in ADMIN_USERS:
+        
+        if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
-                STATE_DOC_REF.update({
-                    'attendees': [], 'waiting_players': [], 'active_games': {},
-                    'session_password': generate_password(), 'chooser': None
-                })
+                STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()})
                 clear_game_log(); st.cache_data.clear(); st.rerun()
             if st.button("🔥 Clear Game Log", use_container_width=True, help="Deletes all game log entries."):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
-    logged_in_player = next((p for p in players_db.values() if p['name'] == st.session_state.logged_in_user), None)
-    
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
     
     with tab_dashboard:
-        st.subheader("⏳ Waiting Queue (Winners move to the top)")
-        waiting_pids = live_state.get('waiting_players', [])
-        waiting_players = get_players_from_ids(waiting_pids, players_db)
-        if not waiting_players: st.info("Waiting list is empty.")
+        st.subheader("⏳ Waiting Queue")
+        sorted_waiting = sorted(get_players_from_ids(live_state.get('waiting_players', []), players_db), key=lambda p: (0 if p.get('last_played') is None else 1, p.get('last_played') or datetime.datetime.min.replace(tzinfo=timezone.utc)))
+        if not sorted_waiting: st.info("Waiting list is empty.")
         else:
-            pills = [f"<div class='player-pill'>{i+1}. {p['name']}</div>" for i, p in enumerate(waiting_players)]
+            pills = [f"<div class='player-pill' style='{'border: 2px solid #9067C6;' if i<4 else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(sorted_waiting)]
             st.markdown("".join(pills), unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True); st.subheader("🏸 Active Courts")
-        
         court_cols = st.columns(2)
         for i in range(MAX_COURTS):
             cid_str, game = str(i + 1), live_state.get('active_games', {}).get(str(i + 1))
@@ -212,67 +249,28 @@ def render_main_dashboard(live_state, players_db):
                         t1s, t2s = s_cols[0].number_input("T1 Score", 0, step=1, key=f"t1s_{cid_str}"), s_cols[1].number_input("T2 Score", 0, step=1, key=f"t2s_{cid_str}")
                         if st.button("Log Score & Finish", key=f"log_{cid_str}", use_container_width=True, type="primary"):
                             game_to_log = live_state['active_games'].pop(cid_str)
-                            winning_pids = team1_pids if t1s > t2s else team2_pids if t2s > t1s else []
-                            losing_pids = team2_pids if t1s > t2s else team1_pids if t2s > t1s else team1_pids + team2_pids
-                            chooser_pid = None
-                            if winning_pids:
-                                chooser_pid = logged_in_player['id'] if logged_in_player['id'] in winning_pids else winning_pids[0]
-                            
-                            current_waiting = [pid for pid in live_state.get('waiting_players', []) if pid not in winning_pids + losing_pids]
-                            new_waiting_list = winning_pids + current_waiting + losing_pids
-                            
-                            STATE_DOC_REF.update({
-                                'active_games': live_state['active_games'], 
-                                'waiting_players': new_waiting_list,
-                                'chooser': {'player_id': chooser_pid, 'court_id': cid_str} if chooser_pid else None
-                            })
-                            for pid in winning_pids + losing_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                            log = {'finish_time': firestore.SERVER_TIMESTAMP, 'Duration': f"{int(elapsed.total_seconds() // 60)}m", 'Court': cid_str,
+                            all_player_ids = game_to_log.get('player_ids', [])
+                            STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': firestore.ArrayUnion(all_player_ids)})
+                            for pid in all_player_ids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
+                            finish_time = datetime.datetime.now(timezone.utc)
+                            duration = finish_time - start_time
+                            log = {'finish_time': finish_time, 'Duration': f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s", 'Court': cid_str,
                                    'Team 1 Players': " & ".join([p['name'] for p in team1_players]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players]),
                                    'Score': f"{t1s} - {t2s}", 'Winner': "Draw" if t1s == t2s else "Team 1" if t1s > t2s else "Team 2"}
                             LOG_COLLECTION_REF.add(log); st.rerun()
-                    else: # Court is free
-                        chooser = live_state.get('chooser')
-                        if chooser and chooser['court_id'] == cid_str:
-                            chooser_player = players_db.get(str(chooser['player_id']))
-                            if logged_in_player and chooser_player and logged_in_player['id'] == chooser_player['id']:
-                                st.success(f"Your turn, {chooser_player['name']}! Form the teams for this court.")
-                                other_players = [p for p in waiting_players if p['id'] != chooser_player['id']]
-                                opts = {p['name']: p['id'] for p in other_players}
-                                selected_names = st.multiselect("1. Select 3 other players", options=opts.keys(), key=f"player_sel_{cid_str}", max_selections=3)
-                                if len(selected_names) == 3:
-                                    team1_choices = [chooser_player['name']] + selected_names
-                                    team1_names = st.multiselect("2. Select 2 players for your team (Team 1)", options=team1_choices, key=f"t1_sel_{cid_str}", max_selections=2)
-                                    if len(team1_names) == 2:
-                                        team2_names = [name for name in team1_choices if name not in team1_names]
-                                        st.markdown(f"**Team 1:** {team1_names[0]} & {team1_names[1]}")
-                                        st.markdown(f"**Team 2:** {team2_names[0]} & {team2_names[1]}")
-                                        if st.button("Start Game", key=f"start_manual_{cid_str}", use_container_width=True):
-                                            all_pids = [chooser_player['id']] + [opts[name] for name in selected_names]
-                                            team1_pids = [players_db[str(opts[name])]['id'] if name != chooser_player['name'] else chooser_player['id'] for name in team1_names]
-                                            team2_pids = [players_db[str(opts[name])]['id'] if name != chooser_player['name'] else chooser_player['id'] for name in team2_names]
-                                            
-                                            live_state['active_games'][cid_str] = {
-                                                'team1': get_players_from_ids(team1_pids, players_db), 
-                                                'team2': get_players_from_ids(team2_pids, players_db),
-                                                'player_ids': all_pids, 
-                                                'start_time': firestore.SERVER_TIMESTAMP
-                                            }
-                                            STATE_DOC_REF.update({
-                                                'waiting_players': firestore.ArrayRemove(all_pids),
-                                                'active_games': live_state['active_games'],
-                                                'chooser': None
-                                            })
-                                            for pid in all_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
-                                            st.rerun()
-                            else:
-                                st.info(f"Waiting for **{chooser_player['name']}** to pick players for this court.")
-                        else:
-                            st.info("Court is available. A winner from a previous game needs to form the teams.")
+                    else: 
+                        st.success("Court is available!")
+                        next_up = get_fair_player_selection(live_state, players_db)
+                        if st.button("Auto Assign", key=f"auto_{cid_str}", use_container_width=True, type="primary", disabled=(not next_up)):
+                            team1, team2 = create_balanced_teams(next_up); pids = [p['id'] for p in next_up]
+                            STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(pids)})
+                            live_state['active_games'][cid_str] = {'team1': team1, 'team2': team2, 'player_ids': pids, 'start_time': firestore.SERVER_TIMESTAMP}
+                            STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                            for pid in pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
+                            st.rerun()
 
     with tab_guest_checkout:
         st.subheader("Guest Check-in and Player Check-out")
-        # (This tab's logic remains the same as previous version)
         search = st.text_input("Search for a player...", placeholder="Type name...", key="checkout_search")
         cols = st.columns(3)
         filtered = [p for p in players_db.values() if search.lower() in p.get('name', '').lower()]
@@ -316,7 +314,7 @@ def render_main_dashboard(live_state, players_db):
 
 
 # ────────────────────────────────────────────────────────────────────────────────
-# MAIN APP EXECUTION
+# MAIN APP EXECUTION (URL ROUTER)
 # ────────────────────────────────────────────────────────────────────────────────
 if not db:
     st.error("Could not connect to Firebase.")
@@ -325,9 +323,8 @@ else:
     live_state = get_live_state()
     players_db = get_players_db()
     
-    if not st.session_state.logged_in_user:
-        render_login_page(live_state, players_db)
+    mode = st.query_params.get("mode")
+    if mode == "court":
+        render_court_mode(live_state, players_db)
     else:
-        render_sidebar(live_state, players_db)
-        render_main_dashboard(live_state, players_db)
-        st_autorefresh(interval=5000, key="firestore_refresher")
+        render_player_mode(live_state, players_db)
