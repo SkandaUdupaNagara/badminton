@@ -25,11 +25,10 @@ SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
 
 try:
     ADMIN_PASSWORD = st.secrets.app_secrets.admin_password
-    PASSWORD_REQUESTERS = st.secrets.app_secrets.password_requesters
     ADMIN_USERS = st.secrets.app_secrets.admin_users
     INITIAL_ROSTER_JSON = st.secrets.app_secrets.initial_roster_json
 except AttributeError:
-    st.error("Your `secrets.toml` file is missing or misconfigured under the `[app_secrets]` section.")
+    st.error("Your `secrets.toml` file is missing or misconfigured.")
     st.stop()
 
 
@@ -84,7 +83,7 @@ def get_live_state():
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
 # ────────────────────────────────────────────────────────────────────────────────
-# PLAYER & COURT MODES (Login and Attendance)
+# LOGIN & ATTENDANCE MODES
 # ────────────────────────────────────────────────────────────────────────────────
 def render_player_mode(live_state, players_db):
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
@@ -108,7 +107,7 @@ def render_player_mode(live_state, players_db):
                         st.session_state.player_logged_in_name = found_player['name']
                         player_id = found_player['id']
                         if player_id not in live_state.get('attendees', []):
-                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
+                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]),'waiting_players': firestore.ArrayUnion([player_id])})
                             PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
                             st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
                         st.rerun()
@@ -279,6 +278,7 @@ def render_main_dashboard(live_state, players_db):
 if not db:
     st.error("Could not connect to Firebase.")
 else:
+    # Initialize browser-local state (for login status)
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
