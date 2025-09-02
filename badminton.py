@@ -35,7 +35,7 @@ except AttributeError:
 # --- Custom CSS ---
 st.markdown("""<style>
 .main .block-container{padding:1rem 1rem 10rem}
-[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}
+[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}
 .stButton>button{border-radius:.5rem;font-weight:500}
 h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}
 .player-pill{display:block;padding:8px 12px;margin:4px 0;border-radius:8px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}
@@ -72,10 +72,11 @@ def get_live_state():
     else: # First time setup
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
+            if 'chooser_count' not in player: player['chooser_count'] = 0
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
         default_state = {
             'attendees': [], 'waiting_players': [], 'active_games': {},
-            'session_password': generate_password(), 'last_chooser_id': None
+            'session_password': generate_password(), 'finishers_count': 0
         }
         STATE_DOC_REF.set(default_state)
         return default_state
@@ -83,7 +84,7 @@ def get_live_state():
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
 # ────────────────────────────────────────────────────────────────────────────────
-# PLAYER & COURT MODES (Login and Attendance)
+# PLAYER & COURT MODES
 # ────────────────────────────────────────────────────────────────────────────────
 def render_player_mode(live_state, players_db):
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
@@ -148,7 +149,9 @@ def render_court_mode(live_state, players_db):
                 if admin_pw == ADMIN_PASSWORD:
                     with st.spinner("Syncing..."):
                         roster = json.loads(INITIAL_ROSTER_JSON)
-                        for player in roster: PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
+                        for player in roster: 
+                            if 'chooser_count' not in player: player['chooser_count'] = 0
+                            PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
                         st.cache_data.clear()
                     st.success("Roster Synced!"); time.sleep(1); st.rerun()
                 else: st.error("Incorrect Admin Password.")
@@ -182,7 +185,7 @@ def render_sidebar(live_state, players_db):
         if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
-                STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password(), 'last_chooser_id': None})
+                STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password(), 'finishers_count': 0})
                 clear_game_log(); st.cache_data.clear(); st.rerun()
             if st.button("🔥 Clear Game Log", use_container_width=True, help="Deletes all game log entries."):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
@@ -199,7 +202,7 @@ def render_main_dashboard(live_state, players_db):
                 with st.container(border=True):
                     st.markdown(f"<h4>Court {cid_str}</h4>", unsafe_allow_html=True)
                     if game:
-                        team1_pids = [p['id'] for p in game.get('team1', [])]; team2_pids = [p['id'] for p in game.get('team2', [])]
+                        team1_pids = game.get('team1_pids', []); team2_pids = game.get('team2_pids', [])
                         team1_players = get_players_from_ids(team1_pids, players_db); team2_players = get_players_from_ids(team2_pids, players_db)
                         st.markdown(f"**Team 1:** {' & '.join([p['name'] for p in team1_players if p])}")
                         st.markdown(f"**Team 2:** {' & '.join([p['name'] for p in team2_players if p])}")
@@ -211,30 +214,38 @@ def render_main_dashboard(live_state, players_db):
                         s_cols = st.columns(2)
                         t1s, t2s = s_cols[0].number_input("T1 Score", 0, step=1, key=f"t1s_{cid_str}"), s_cols[1].number_input("T2 Score", 0, step=1, key=f"t2s_{cid_str}")
                         if st.button("Log Score & Finish", key=f"log_{cid_str}", use_container_width=True, type="primary"):
-                            game_to_log = live_state['active_games'].pop(cid_str)
-                            
-                            # --- MODIFIED: New "Finishers First, Winners on Top" Logic ---
+                            live_state['active_games'].pop(cid_str)
                             winning_pids = team1_pids if t1s > t2s else team2_pids if t2s > t1s else []
                             losing_pids = team2_pids if t1s > t2s else team1_pids if t2s > t1s else team1_pids + team2_pids
                             
-                            last_chooser_id = live_state.get('last_chooser_id')
-                            next_chooser_pid = None
-                            
-                            if winning_pids:
-                                other_winner_id = None
-                                if len(winning_pids) > 1 and winning_pids[0] == last_chooser_id:
-                                    next_chooser_pid, other_winner_id = winning_pids[1], winning_pids[0]
+                            winners = get_players_from_ids(winning_pids, players_db)
+                            if len(winners) == 2:
+                                p1_count = winners[0].get('chooser_count', 0)
+                                p2_count = winners[1].get('chooser_count', 0)
+                                if p1_count <= p2_count:
+                                    ordered_winners = [winners[0]['id'], winners[1]['id']]
                                 else:
-                                    next_chooser_pid = winning_pids[0]
-                                    if len(winning_pids) > 1: other_winner_id = winning_pids[1]
-                                ordered_winners = [next_chooser_pid, other_winner_id] if other_winner_id else [next_chooser_pid]
-                            else: # This happens in a draw
-                                ordered_winners = []
+                                    ordered_winners = [winners[1]['id'], winners[0]['id']]
+                            else:
+                                ordered_winners = winning_pids
 
-                            current_waiting = [pid for pid in live_state.get('waiting_players', []) if pid not in ordered_winners + losing_pids]
-                            new_waiting_list = ordered_winners + losing_pids + current_waiting
+                            finishers_count = live_state.get('finishers_count', 0)
+                            current_waiting = live_state.get('waiting_players', [])
+                            
+                            new_finishers = ordered_winners + losing_pids
+                            
+                            # Insert the new finishers after any previous finishers but before original waiters
+                            pre_finishers = current_waiting[:finishers_count]
+                            post_finishers = current_waiting[finishers_count:]
+                            new_waiting_list = pre_finishers + new_finishers + post_finishers
 
-                            STATE_DOC_REF.update({'active_games': live_state['active_games'], 'waiting_players': new_waiting_list, 'last_chooser_id': next_chooser_pid})
+                            STATE_DOC_REF.update({
+                                'active_games': live_state['active_games'], 
+                                'waiting_players': new_waiting_list,
+                                'finishers_count': finishers_count + 4
+                            })
+                            if ordered_winners:
+                                PLAYERS_COLLECTION_REF.document(str(ordered_winners[0])).update({'chooser_count': firestore.Increment(1)})
                             for pid in ordered_winners + losing_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                             log = {'finish_time': firestore.SERVER_TIMESTAMP, 'Duration': f"{int(elapsed.total_seconds() // 60)}m", 'Court': cid_str,
                                    'Team 1 Players': " & ".join([p['name'] for p in team1_players if p]), 'Team 2 Players': " & ".join([p['name'] for p in team2_players if p]),
@@ -261,9 +272,13 @@ def render_main_dashboard(live_state, players_db):
                                         all_pids = [chooser_player['id']] + [opts[name] for name in selected_names]
                                         team1_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team1_names]
                                         team2_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team2_names]
-                                        STATE_DOC_REF.update({'waiting_players': firestore.ArrayRemove(all_pids)})
-                                        live_state['active_games'][cid_str] = {'team1': get_players_from_ids(team1_pids, players_db), 'team2': get_players_from_ids(team2_pids, players_db), 'player_ids': all_pids, 'start_time': firestore.SERVER_TIMESTAMP}
-                                        STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                                        
+                                        live_state['active_games'][cid_str] = {'team1_pids': team1_pids, 'team2_pids': team2_pids, 'player_ids': all_pids, 'start_time': firestore.SERVER_TIMESTAMP}
+                                        STATE_DOC_REF.update({
+                                            'waiting_players': firestore.ArrayRemove(all_pids),
+                                            'active_games': live_state['active_games'],
+                                            'finishers_count': live_state.get('finishers_count', 0) - 4
+                                        })
                                         for pid in all_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                                         st.rerun()
 
@@ -279,7 +294,7 @@ def render_main_dashboard(live_state, players_db):
                     is_chooser = (i == 0)
                     icon = "👑 " if is_chooser else ""
                     st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
-
+    
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
