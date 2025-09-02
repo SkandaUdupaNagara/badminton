@@ -85,36 +85,28 @@ def render_player_mode(live_state, players_db):
         st.write("Log in with the **last 4 digits** of your mobile number to mark your attendance.")
         
         with st.form("player_login_form"):
-            # --- CORRECTED: Ask for last 4 digits ---
             last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
 
             if submitted:
                 last_four = last_four_input.strip()
-                
                 if not (len(last_four) == 4 and last_four.isdigit()):
                     st.error("Please enter exactly 4 digits.")
                 else:
-                    # --- CORRECTED: Logic now performs an exact match on the 4 digits ---
                     matching_players = [p for p in players_db.values() if p.get('mobile') == last_four]
-                    
                     if len(matching_players) == 0:
-                        st.error("No player found with these last 4 digits.")
+                        st.error("No player found with these last 4 digits. Your data may be out of sync. Please ask an admin to sync the roster.")
                     elif len(matching_players) > 1:
                         st.error("Multiple players share these last 4 digits. Please contact an admin to resolve this.")
                     elif session_password != live_state.get('session_password'):
                         st.error("Incorrect session password.")
                     else:
-                        # Success case
                         found_player = matching_players[0]
                         st.session_state.player_logged_in_name = found_player['name']
                         player_id = found_player['id']
                         if player_id not in live_state.get('attendees', []):
-                            STATE_DOC_REF.update({
-                                'attendees': firestore.ArrayUnion([player_id]),
-                                'waiting_players': firestore.ArrayUnion([player_id])
-                            })
+                            STATE_DOC_REF.update({'attendees': firestore.ArrayUnion([player_id]), 'waiting_players': firestore.ArrayUnion([player_id])})
                             PLAYERS_COLLECTION_REF.document(str(player_id)).update({'check_in_time': firestore.SERVER_TIMESTAMP})
                             st.toast(f"Welcome, {found_player['name']}! You're checked in.", icon="✅")
                         st.rerun()
@@ -131,16 +123,12 @@ def render_player_mode(live_state, players_db):
         if not waiting_players:
             st.info("The waiting list is currently empty.")
         else:
-            pills = []
-            for i, p in enumerate(waiting_players):
-                is_you_class = "background-color: #d0eaff; border: 2px solid #006aff;" if p['name'] == st.session_state.player_logged_in_name else ""
-                pills.append(f"<div class='player-pill' style='{is_you_class}'>{i+1}. {p['name']}</div>")
+            pills = [f"<div class='player-pill' style='{'background-color: #d0eaff; border: 2px solid #006aff;' if p['name'] == st.session_state.player_logged_in_name else ''}'>{i+1}. {p['name']}</div>" for i, p in enumerate(waiting_players)]
             st.markdown("".join(pills), unsafe_allow_html=True)
             
         if st.button("Logout"):
             st.session_state.player_logged_in_name = None
             st.rerun()
-        
         st_autorefresh(interval=10000, key="player_refresher")
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -218,6 +206,17 @@ def render_sidebar(live_state, players_db):
         
         if st.session_state.court_operator_logged_in in ADMIN_USERS:
             st.header("Admin Controls")
+            # --- NEW: Roster Sync Button ---
+            if st.button("⚙️ Sync Player Roster", use_container_width=True, help="Updates the player database from the initial roster in your secrets file."):
+                with st.spinner("Syncing roster with secrets..."):
+                    roster_from_secrets = json.loads(INITIAL_ROSTER_JSON)
+                    for player in roster_from_secrets:
+                        PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
+                    st.cache_data.clear()
+                st.success("Player Roster Synced!")
+                time.sleep(1)
+                st.rerun()
+
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
                 STATE_DOC_REF.update({'attendees': [], 'waiting_players': [], 'active_games': {}, 'session_password': generate_password()})
                 clear_game_log(); st.cache_data.clear(); st.rerun()
@@ -225,6 +224,8 @@ def render_sidebar(live_state, players_db):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
+    # This function is long, but its internal logic is correct from the previous version.
+    # The full implementation is included here as requested.
     tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts & Queue", "👋 Guests & Check-out", "📊 Game Log"])
     
     with tab_dashboard:
@@ -325,14 +326,13 @@ def render_main_dashboard(live_state, players_db):
 if not db:
     st.error("Could not connect to Firebase.")
 else:
-    live_state = get_live_state()
-    players_db = get_players_db()
-    
-    # Initialize local state which is browser-specific
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
     if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
+    
+    live_state = get_live_state()
+    players_db = get_players_db()
     
     mode = st.query_params.get("mode")
     if mode == "court":
