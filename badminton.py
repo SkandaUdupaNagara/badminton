@@ -63,7 +63,7 @@ def get_live_state():
     doc = STATE_DOC_REF.get()
     if doc.exists:
         return doc.to_dict()
-    else: # First time setup
+    else:
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
@@ -82,9 +82,9 @@ def render_player_mode(live_state, players_db):
 
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
-        st.write("Log in with your mobile number to mark your attendance for today's session.")
+        st.write("Log in with your full mobile number to mark your attendance.")
         with st.form("player_login_form"):
-            mobile_number = st.text_input("Enter last 4 digits of your mobile number (e.g., +447123456789) then enter 6789")
+            mobile_number = st.text_input("Enter last 4 digits of your phone number (e.g., +447123456789) then enter 6789")
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
             if submitted:
@@ -136,18 +136,23 @@ def render_court_mode(live_state, players_db):
     if not st.session_state.court_operator_logged_in:
         st.title("🔑 Court Controller Login")
         st.write("Any player who has checked in can log in here to manage the courts.")
+        
         with st.form("court_login_form"):
             present_player_ids = live_state.get('attendees', [])
             present_players = get_players_from_ids(present_player_ids, players_db)
             present_player_names = sorted([p['name'] for p in present_players])
             
-            if not present_player_names:
-                st.warning("No players have checked in yet."); st.stop()
+            # --- FIX: Conditionally disable the form instead of stopping execution ---
+            no_players_present = not present_player_names
+            
+            if no_players_present:
+                st.warning("No players have checked in yet. The Court Mode cannot be accessed until at least one player marks their attendance.")
 
-            selected_user = st.selectbox("Select your name (must be present)", present_player_names)
-            password = st.text_input("Today's Session Password", type="password")
-            submitted = st.form_submit_button("Login")
-            if submitted:
+            selected_user = st.selectbox("Select your name (must be present)", present_player_names, disabled=no_players_present)
+            password = st.text_input("Today's Session Password", type="password", disabled=no_players_present)
+            submitted = st.form_submit_button("Login", disabled=no_players_present)
+            
+            if submitted and not no_players_present:
                 if password == live_state.get('session_password'):
                     st.session_state.court_operator_logged_in = selected_user
                     st.rerun()
@@ -155,6 +160,7 @@ def render_court_mode(live_state, players_db):
                     st.error("Incorrect session password.")
         return
 
+    # If logged in, render the main app
     render_sidebar(live_state, players_db)
     render_main_dashboard(live_state, players_db)
     st_autorefresh(interval=5000, key="court_refresher")
@@ -303,7 +309,6 @@ else:
     live_state = get_live_state()
     players_db = get_players_db()
     
-   
     mode = st.query_params.get("mode")
     if mode == "court":
         render_court_mode(live_state, players_db)
