@@ -84,7 +84,7 @@ def render_player_mode(live_state, players_db):
         st.title("🏸 Player Attendance")
         st.write("Log in with your mobile number to mark your attendance for today's session.")
         with st.form("player_login_form"):
-            mobile_number = st.text_input("Enter your full mobile number (e.g., +447123456789)")
+            mobile_number = st.text_input("Enter last 4 digits of your mobile number (e.g., +447123456789) then enter 6789")
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
             if submitted:
