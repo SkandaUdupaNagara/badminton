@@ -13,7 +13,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from streamlit_autorefresh import st_autorefresh
 
-# --- NEW: Import for Cookie Management ---
+# --- Cookie Manager Import ---
 import extra_streamlit_components as stx
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -64,8 +64,11 @@ def get_live_state():
     if not STATE_DOC_REF: return {}
     doc = STATE_DOC_REF.get()
     if doc.exists:
-        return doc.to_dict()
-    else:
+        state = doc.to_dict()
+        if 'finishers_queue' not in state: state['finishers_queue'] = []
+        if 'main_queue' not in state: state['main_queue'] = state.get('waiting_players', [])
+        return state
+    else: 
         INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
         for player in INITIAL_ROSTER:
             if 'chooser_count' not in player: player['chooser_count'] = 0
@@ -79,8 +82,8 @@ def get_live_state():
 
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
-# --- NEW: Cookie Manager Function ---
-@st.cache_resource(experimental_allow_widgets=True)
+# --- MODIFIED: Cookie Manager Function (parameter removed) ---
+@st.cache_resource
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -90,9 +93,8 @@ def get_cookie_manager():
 def render_player_mode(live_state, players_db, cookie_manager):
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
-        st.write("Log in with the **last 4 digits** of your mobile number.")
         with st.form("player_login_form"):
-            last_four_input = st.text_input("Enter the last 4 digits", max_chars=4)
+            last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
             if submitted:
@@ -106,7 +108,6 @@ def render_player_mode(live_state, players_db, cookie_manager):
                     else:
                         found_player = matching_players[0]
                         st.session_state.player_logged_in_name = found_player['name']
-                        # --- NEW: Set a cookie on successful login ---
                         cookie_manager.set('player_name', found_player['name'], expires_at=datetime.datetime.now() + timedelta(hours=3))
                         player_id = found_player['id']
                         if player_id not in live_state.get('attendees', []):
@@ -125,7 +126,6 @@ def render_player_mode(live_state, players_db, cookie_manager):
             st.markdown("".join(pills), unsafe_allow_html=True)
         if st.button("Logout"):
             st.session_state.player_logged_in_name = None
-            # --- NEW: Delete cookie on logout ---
             cookie_manager.delete('player_name')
             st.rerun()
         st_autorefresh(interval=10000, key="player_refresher")
@@ -143,13 +143,11 @@ def render_court_mode(live_state, players_db, cookie_manager):
             if submitted and not no_players:
                 if password == live_state.get('session_password'):
                     st.session_state.court_operator_logged_in = selected_user
-                    # --- NEW: Set a cookie on successful login ---
                     cookie_manager.set('court_operator', selected_user, expires_at=datetime.datetime.now() + timedelta(hours=3))
                     st.rerun()
                 else: st.error("Incorrect password.")
         st.markdown("---")
         with st.expander("Admin Tools"):
-            # ... (Admin tools logic remains the same)
             admin_pw = st.text_input("Enter Admin Password", type="password", key="court_admin_pw_check")
             c1, c2 = st.columns(2)
             if c1.button("Show Session Password"):
@@ -159,7 +157,7 @@ def render_court_mode(live_state, players_db, cookie_manager):
                 if admin_pw == ADMIN_PASSWORD:
                     with st.spinner("Syncing..."):
                         roster = json.loads(INITIAL_ROSTER_JSON)
-                        for player in roster:
+                        for player in roster: 
                             if 'chooser_count' not in player: player['chooser_count'] = 0
                             PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
                         st.cache_data.clear()
@@ -186,10 +184,8 @@ def render_sidebar(live_state, players_db, cookie_manager):
         st.markdown(f"Operator: **{st.session_state.court_operator_logged_in}**")
         if st.button("Logout Operator", use_container_width=True):
             st.session_state.court_operator_logged_in = None
-            # --- NEW: Delete cookie on logout ---
             cookie_manager.delete('court_operator')
             st.rerun()
-        # ... (rest of sidebar logic is the same) ...
         st.markdown("---")
         all_waiting_pids = live_state.get('finishers_queue', []) + live_state.get('main_queue', [])
         attendees, waiting = len(live_state.get('attendees', [])), len(all_waiting_pids)
@@ -205,10 +201,7 @@ def render_sidebar(live_state, players_db, cookie_manager):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
 def render_main_dashboard(live_state, players_db):
-    # This entire function for displaying the dashboard remains the same as the previous version.
-    # It is included here in full for completeness.
     courts_col, queue_col = st.columns([3, 1])
-    # ... (Full main dashboard logic from previous version) ...
     with courts_col:
         st.subheader("🏸 Active Courts")
         court_grid_cols = st.columns(2)
@@ -266,9 +259,8 @@ def render_main_dashboard(live_state, players_db):
                                         all_pids = [chooser_player['id']] + [opts[name] for name in selected_names]
                                         team1_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team1_names]
                                         team2_pids = [next(p['id'] for p in players_db.values() if p['name'] == name) for name in team2_names]
-                                        STATE_DOC_REF.update({'finishers_queue': firestore.ArrayRemove(all_pids), 'main_queue': firestore.ArrayRemove(all_pids)})
                                         live_state['active_games'][cid_str] = {'team1': get_players_from_ids(team1_pids, players_db), 'team2': get_players_from_ids(team2_pids, players_db), 'player_ids': all_pids, 'start_time': firestore.SERVER_TIMESTAMP}
-                                        STATE_DOC_REF.update({'active_games': live_state['active_games']})
+                                        STATE_DOC_REF.update({'finishers_queue': firestore.ArrayRemove(all_pids), 'main_queue': firestore.ArrayRemove(all_pids), 'active_games': live_state['active_games']})
                                         for pid in all_pids: PLAYERS_COLLECTION_REF.document(str(pid)).update({'last_played': firestore.SERVER_TIMESTAMP})
                                         st.rerun()
 
@@ -284,21 +276,18 @@ def render_main_dashboard(live_state, players_db):
                     is_chooser = (i == 0); icon = "👑 " if is_chooser else ""
                     st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
             if live_state.get('finishers_queue'): st.markdown("---")
-
+    
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
 if not db:
     st.error("Could not connect to Firebase.")
 else:
-    # --- NEW: Initialize cookie manager ---
     cookie_manager = get_cookie_manager()
-
-    # --- NEW: Initialize local state for UI ---
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     
-    # --- NEW: Auto-login from cookie before rendering anything ---
+    # Auto-login from cookie before rendering anything
     if not st.session_state.court_operator_logged_in:
         st.session_state.court_operator_logged_in = cookie_manager.get('court_operator')
     if not st.session_state.player_logged_in_name:
