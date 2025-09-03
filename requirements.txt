@@ -1,4 +1,5 @@
 streamlit
-firebase-admin
 pandas
+firebase-admin
 streamlit-autorefresh
+extra-streamlit-components
