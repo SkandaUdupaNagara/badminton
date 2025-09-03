@@ -36,7 +36,7 @@ except AttributeError:
 
 
 # --- Custom CSS ---
-st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS hidden for brevity
+st.markdown("""<style>.main .block-container{padding:1rem 1rem 10rem}[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}.stButton>button{border-radius:.5rem;font-weight:500}h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}.player-pill{display:block;padding:8px 12px;margin:4px 0;border-radius:8px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}.player-pill-chooser{background-color:#fff0c1;border:2px solid #ffbf00;font-weight:700}</style>""", unsafe_allow_html=True)
 
 # --- Firebase Integration ---
 def init_firebase():
@@ -82,8 +82,7 @@ def get_live_state():
 
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
-# --- MODIFIED: Cookie Manager Function (parameter removed) ---
-@st.cache_resource
+# --- MODIFIED: Removed @st.cache_resource decorator to fix warning ---
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -93,8 +92,9 @@ def get_cookie_manager():
 def render_player_mode(live_state, players_db, cookie_manager):
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
+        st.write("Log in with the **last 4 digits** of your mobile number.")
         with st.form("player_login_form"):
-            last_four_input = st.text_input("Enter the last 4 digits of your mobile number", max_chars=4)
+            last_four_input = st.text_input("Enter the last 4 digits", max_chars=4)
             session_password = st.text_input("Today's Session Password", type="password")
             submitted = st.form_submit_button("Mark Attendance")
             if submitted:
@@ -168,9 +168,10 @@ def render_court_mode(live_state, players_db, cookie_manager):
     render_main_dashboard(live_state, players_db)
     st_autorefresh(interval=5000, key="court_refresher")
 
-# ... (Helper functions like get_players_from_ids, clear_game_log remain the same) ...
+# --- Helper functions ---
 def get_players_from_ids(pids: List[int], players_db: dict) -> List[dict]:
     return [players_db.get(str(pid)) for pid in pids if str(pid) in players_db]
+
 def clear_game_log():
     if LOG_COLLECTION_REF:
         for doc in LOG_COLLECTION_REF.stream(): doc.reference.delete()
@@ -276,7 +277,7 @@ def render_main_dashboard(live_state, players_db):
                     is_chooser = (i == 0); icon = "👑 " if is_chooser else ""
                     st.markdown(f"<div class='player-pill {'player-pill-chooser' if is_chooser else ''}'>{i+1}. {icon}{p['name']}</div>", unsafe_allow_html=True)
             if live_state.get('finishers_queue'): st.markdown("---")
-    
+
 # ────────────────────────────────────────────────────────────────────────────────
 # MAIN APP EXECUTION
 # ────────────────────────────────────────────────────────────────────────────────
@@ -286,8 +287,9 @@ else:
     cookie_manager = get_cookie_manager()
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
+    if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
+    if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
     
-    # Auto-login from cookie before rendering anything
     if not st.session_state.court_operator_logged_in:
         st.session_state.court_operator_logged_in = cookie_manager.get('court_operator')
     if not st.session_state.player_logged_in_name:
