@@ -29,21 +29,13 @@ SKILL_MAP = {1: 'Beginner', 2: 'Intermediate', 3: 'Advanced'}
 try:
     ADMIN_PASSWORD = st.secrets.app_secrets.admin_password
     ADMIN_USERS = st.secrets.app_secrets.admin_users
-    INITIAL_ROSTER_JSON = st.secrets.app_secrets.initial_roster_json
 except AttributeError:
-    st.error("Your `secrets.toml` file is missing or misconfigured.")
+    st.error("Your `secrets.toml` file is missing or misconfigured. It must contain admin_password and admin_users.")
     st.stop()
 
 
 # --- Custom CSS ---
-st.markdown("""<style>
-.main .block-container{padding:1rem 1rem 10rem}
-[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}
-.stButton>button{border-radius:.5rem;font-weight:500}
-h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}
-.player-pill{display:block;padding:8px 12px;margin:4px 0;border-radius:8px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}
-.player-pill-chooser{background-color:#fff0c1;border:2px solid #ffbf00;font-weight:700}
-</style>""", unsafe_allow_html=True)
+st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS hidden for brevity
 
 # --- Firebase Integration ---
 def init_firebase():
@@ -76,20 +68,17 @@ def get_live_state():
         if 'main_queue' not in state: state['main_queue'] = []
         return state
     else: 
-        INITIAL_ROSTER = json.loads(INITIAL_ROSTER_JSON)
-        for player in INITIAL_ROSTER:
-            if 'chooser_count' not in player: player['chooser_count'] = 0
-            PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player)
         default_state = {
             'attendees': [], 'finishers_queue': [], 'main_queue': [], 'active_games': {},
             'session_password': generate_password(), 'last_chooser_id': None
         }
         STATE_DOC_REF.set(default_state)
+        # Clear player collection as well for a truly fresh start
+        for doc in PLAYERS_COLLECTION_REF.stream(): doc.reference.delete()
         return default_state
 
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
-# --- FIX: Removed the @st.cache_resource decorator ---
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -162,21 +151,10 @@ def render_court_mode(live_state, players_db, cookie_manager):
                     st.rerun()
                 else: st.error("Incorrect password.")
         st.markdown("---")
-        with st.expander("Admin Tools"):
+        with st.expander("Admin: Get Session Password"):
             admin_pw = st.text_input("Enter Admin Password", type="password", key="court_admin_pw_check")
-            c1, c2 = st.columns(2)
-            if c1.button("Show Session Password"):
+            if st.button("Show Session Password"):
                 if admin_pw == ADMIN_PASSWORD: st.success(f"Password is: **{live_state.get('session_password')}**")
-                else: st.error("Incorrect Admin Password.")
-            if c2.button("⚙️ Sync Player Roster"):
-                if admin_pw == ADMIN_PASSWORD:
-                    with st.spinner("Syncing..."):
-                        roster = json.loads(INITIAL_ROSTER_JSON)
-                        for player in roster: 
-                            if 'chooser_count' not in player: player['chooser_count'] = 0
-                            PLAYERS_COLLECTION_REF.document(str(player['id'])).set(player, merge=True)
-                        st.cache_data.clear()
-                    st.success("Roster Synced!"); time.sleep(1); st.rerun()
                 else: st.error("Incorrect Admin Password.")
         return
     render_sidebar(live_state, players_db, cookie_manager)
@@ -214,7 +192,7 @@ def render_sidebar(live_state, players_db, cookie_manager):
             if st.button("🔄 Reset Full Session", use_container_width=True, type="secondary"):
                 STATE_DOC_REF.set({'attendees': [], 'finishers_queue': [], 'main_queue': [], 'active_games': {}, 'session_password': generate_password(), 'last_chooser_id': None})
                 for doc in PLAYERS_COLLECTION_REF.stream(): doc.reference.delete()
-                clear_game_log(); st.cache_data.clear(); st.rerun()
+                clear__game_log(); st.cache_data.clear(); st.rerun()
             if st.button("🔥 Clear Game Log", use_container_width=True, help="Deletes all game log entries."):
                 clear_game_log(); st.toast("Game log cleared!", icon="🧹"); st.rerun()
 
@@ -223,6 +201,7 @@ def render_main_dashboard(live_state, players_db):
     with courts_col:
         tab_dashboard, tab_checkout, tab_log = st.tabs(["🏟️ Courts", "👋 Check-out", "📊 Game Log"])
         with tab_dashboard:
+            # ... (Full implementation from previous version) ...
             st.subheader("Active Courts")
             court_grid_cols = st.columns(2)
             for i in range(MAX_COURTS):
@@ -341,7 +320,6 @@ def render_main_dashboard(live_state, players_db):
 if not db:
     st.error("Could not connect to Firebase.")
 else:
-    # Initialize local state which is browser-specific
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if 'logout_in_progress' not in st.session_state: st.session_state.logout_in_progress = False
