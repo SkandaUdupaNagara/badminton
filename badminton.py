@@ -36,14 +36,7 @@ except AttributeError:
 
 
 # --- Custom CSS ---
-st.markdown("""<style>
-.main .block-container{padding:1rem 1rem 10rem}
-[data-testid="stVerticalBlock"]>[data-testid="stVerticalBlock"]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}
-.stButton>button{border-radius:.5rem;font-weight:500}
-h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}
-.player-pill{display:block;padding:8px 12px;margin:4px 0;border-radius:8px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}
-.player-pill-chooser{background-color:#fff0c1;border:2px solid #ffbf00;font-weight:700}
-</style>""", unsafe_allow_html=True)
+st.markdown("""<style>.main .block-container{padding:1rem 1rem 10rem}[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>[data-testid=stVerticalBlock]>div:nth-child(1)>div{border-radius:.75rem;box-shadow:0 4px 6px rgba(0,0,0,.05);border:1px solid #e6e6e6}.stButton>button{border-radius:.5rem;font-weight:500}h4{font-size:1.25rem;font-weight:600;margin-bottom:.5rem}.player-pill{display:block;padding:8px 12px;margin:4px 0;border-radius:8px;background-color:#f0f2f6;font-weight:500;border:1px solid #ddd}.player-pill-chooser{background-color:#fff0c1;border:2px solid #ffbf00;font-weight:700}</style>""", unsafe_allow_html=True)
 
 # --- Firebase Integration ---
 def init_firebase():
@@ -89,7 +82,6 @@ def get_live_state():
 
 def generate_password(): return "".join(random.choices(string.digits, k=6))
 
-# --- FIX: Removed the @st.cache_resource decorator ---
 def get_cookie_manager():
     return stx.CookieManager()
 
@@ -97,7 +89,6 @@ def get_cookie_manager():
 # PLAYER & COURT MODES
 # ────────────────────────────────────────────────────────────────────────────────
 def render_player_mode(live_state, players_db, cookie_manager):
-    if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
     if not st.session_state.player_logged_in_name:
         st.title("🏸 Player Attendance")
         st.write("Log in with the **last 4 digits** of your mobile number.")
@@ -133,13 +124,13 @@ def render_player_mode(live_state, players_db, cookie_manager):
             pills = [f"<div class='player-pill' style='{'background-color: #d0eaff; border: 2px solid #006aff;' if p and p['name'] == st.session_state.player_logged_in_name else ''}'>{i+1}. {p['name'] if p else '...'}</div>" for i, p in enumerate(waiting_players)]
             st.markdown("".join(pills), unsafe_allow_html=True)
         if st.button("Logout"):
+            st.session_state.logout_in_progress = True
             st.session_state.player_logged_in_name = None
             cookie_manager.delete('player_name')
             st.rerun()
         st_autorefresh(interval=10000, key="player_refresher")
 
 def render_court_mode(live_state, players_db, cookie_manager):
-    if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if not st.session_state.court_operator_logged_in:
         st.title("🔑 Court Controller Login")
         with st.form("court_login_form"):
@@ -193,6 +184,7 @@ def render_sidebar(live_state, players_db, cookie_manager):
         st.title("🏸 Acers Badminton Club")
         st.markdown(f"Operator: **{st.session_state.court_operator_logged_in}**")
         if st.button("Logout Operator", use_container_width=True):
+            st.session_state.logout_in_progress = True
             st.session_state.court_operator_logged_in = None
             cookie_manager.delete('court_operator')
             st.rerun()
@@ -214,6 +206,7 @@ def render_main_dashboard(live_state, players_db):
     courts_col, queue_col = st.columns([3, 1])
     with courts_col:
         tab_dashboard, tab_guest_checkout, tab_log = st.tabs(["🏟️ Courts", "👋 Guests & Check-out", "📊 Game Log"])
+
         with tab_dashboard:
             st.subheader("Active Courts")
             court_grid_cols = st.columns(2)
@@ -319,7 +312,6 @@ def render_main_dashboard(live_state, players_db):
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Download Log (CSV)", csv, f"badminton_log_{datetime.date.today().strftime('%Y-%m-%d')}.csv", "text/csv")
 
-
     with queue_col:
         st.subheader("⏳ Waiting Queue")
         st.caption("Finishers move to the top, winners first.")
@@ -353,14 +345,16 @@ if not db:
 else:
     if 'court_operator_logged_in' not in st.session_state: st.session_state.court_operator_logged_in = None
     if 'player_logged_in_name' not in st.session_state: st.session_state.player_logged_in_name = None
-    if 'password_revealed' not in st.session_state: st.session_state.password_revealed = False
-    if 'show_confirm_for' not in st.session_state: st.session_state.show_confirm_for = None
-    
+    if 'logout_in_progress' not in st.session_state: st.session_state.logout_in_progress = False
+
     cookie_manager = get_cookie_manager()
-    if not st.session_state.court_operator_logged_in:
+    
+    if not st.session_state.court_operator_logged_in and not st.session_state.logout_in_progress:
         st.session_state.court_operator_logged_in = cookie_manager.get('court_operator')
-    if not st.session_state.player_logged_in_name:
+    if not st.session_state.player_logged_in_name and not st.session_state.logout_in_progress:
         st.session_state.player_logged_in_name = cookie_manager.get('player_name')
+    
+    st.session_state.logout_in_progress = False
 
     live_state = get_live_state()
     players_db = get_players_db()
