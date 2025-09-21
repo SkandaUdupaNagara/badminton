@@ -3,4 +3,4 @@ pandas
 firebase-admin
 streamlit-autorefresh
 extra-streamlit-components
-streamlit-dnd
+st-dnd
